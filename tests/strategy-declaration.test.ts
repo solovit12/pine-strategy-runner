@@ -13,6 +13,12 @@ plot(close)`)).toEqual({
     });
   });
 
+  it('reads process_orders_on_close only when it is a literal', () => {
+    expect(strategyDeclarationProperties('strategy("A", process_orders_on_close=true)')).toEqual({ processOrdersOnClose: true });
+    expect(strategyDeclarationProperties('strategy("A", process_orders_on_close = false)')).toEqual({ processOrdersOnClose: false });
+    expect(strategyDeclarationProperties('strategy("A", process_orders_on_close=input(true))')).toEqual({});
+  });
+
   it('ignores computed values, non-percent commission, unfinished calls and code without strategy()', () => {
     expect(strategyDeclarationProperties('strategy("A", initial_capital=1000 * 2, default_qty_type=strategy.cash, default_qty_value=input(5))'))
       .toEqual({ defaultOrderSizeType: 'cash' });

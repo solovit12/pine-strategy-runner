@@ -8,7 +8,7 @@ strategy can behave differently. This page lists what is tested.
 
 | Feature | Status | Notes |
 |---|---|---|
-| Pine v5/v6 `strategy()` scripts | Partial | The tested subset matches TradingView (see below); broad language coverage is not claimed. |
+| Pine v5/v6 `strategy()` scripts | Partial | PineTS 0.11 covers most of the language (`switch`, tuples, methods, user types, `once`, nearly all `ta.*` functions). The tested subset matches TradingView (see below). |
 | Date range | Supported | The strategy receives only candles inside the selected UTC window, so its state starts at the first selected bar. |
 | Initial capital, order size, pyramiding | Supported | The form overrides the values in `strategy(...)`. Order size: fixed quantity, cash amount or percent of equity. |
 | Commission | Supported | You enter the percent per fill; it is charged on entry and again on exit. |
@@ -20,7 +20,10 @@ strategy can behave differently. This page lists what is tested.
 | Long/short reversal | Supported | |
 | Closed / open / total PnL | Supported | Shown separately. |
 | Calculation timing | On bar close | `calc_on_every_tick`, `calc_on_order_fills` and history ticks are not supported. |
-| `request.security` | Not supported | Rejected before running, so no wrong series is substituted. |
+| `process_orders_on_close` | Supported | With `strategy(process_orders_on_close=true)` market orders fill at the close of the bar that placed them, as on TradingView. |
+| `strategy.close(immediately=true)` | Supported | Fills at the close of the bar that placed it. |
+| Stop-limit, trailing stops, OCA groups, partial exits | Not supported | The minute-by-minute check rejects them before running instead of filling them wrongly. |
+| `request.security`, `request.security_lower_tf` | Partial | The chart's own symbol on another timeframe: candles come from the same exchange (2h, 45m and other day-dividing timeframes are built from smaller ones), checked for gaps. `lookahead_off` reads the last closed higher-timeframe bar, as on TradingView; a bar still open at the end of the period holds only candles closed by then. Another symbol, monthly and multi-day timeframes stop the run with a message. |
 | Plots and indicators on the chart | Not shown | The chart shows candles and trade markers. |
 | Data | Binance USDⓈ-M perpetuals | Gaps in the exchange data stop the backtest instead of being filled in. TradingView's own data can differ slightly. |
 
@@ -33,6 +36,7 @@ strategy can behave differently. This page lists what is tested.
 | Fees | Supported | Each exchange's maker/taker rates, editable per run; HIP-3 markets pay their own rate. |
 | Funding payments | Not included | |
 | Real orders | Never | Paper uses virtual accounts and public market data only; no exchange keys are needed. |
+| `request.security` | Partial | Higher timeframes that are multiples of the chart's, of the same symbol: history is loaded once from the exchange at start, newer bars are built from the chart's closed candles (no extra delay per signal). Lower timeframes and other symbols stop the run with a message. |
 
 ## Reference tests
 

@@ -2,6 +2,7 @@ import { fork, type ChildProcess } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 import type { Candle } from '../../../../packages/shared/src/contracts.js';
+import type { SeriesRequest } from '../../../../packages/pine-runtime/src/series-requests.js';
 import type { PineLiveExecutionSettings, PineLiveFill, PineLiveRunResult } from '../../../../packages/pine-runtime/src/live-engine.js';
 import type { PineSymbolMarket } from '../../../../packages/pine-runtime/src/symbol-info.js';
 import type { PineLiveWorkerRequest, PineLiveWorkerResponse } from './pine-live-worker.js';
@@ -18,7 +19,9 @@ export class PineLiveClient {
   #failure: Error | null = null;
   stderr = '';
 
-  constructor(source: string, execution: PineLiveExecutionSettings, startMs: number, memoryMb = 768) {
+  /** `loadSeries` serves request.security history of a track's market on another timeframe. */
+  constructor(source: string, execution: PineLiveExecutionSettings, startMs: number, memoryMb = 768,
+    loadSeries?: (key: string, request: SeriesRequest) => Promise<Candle[]>) {
     const development = import.meta.url.endsWith('.ts');
     const workerUrl = new URL(development ? './pine-live-worker.ts' : './pine-live-worker.js', import.meta.url);
     this.#child = fork(fileURLToPath(workerUrl), [], {
@@ -34,6 +37,16 @@ export class PineLiveClient {
     this.#ready.catch(() => undefined);
     this.#child.on('message', (message: PineLiveWorkerResponse) => {
       if (message.type === 'ready') return markReady();
+      if (message.type === 'series-request') {
+        const answer = (reply: Extract<PineLiveWorkerRequest, { type: 'series-response' }>) => {
+          if (!this.#failure && this.#child.connected) this.#child.send(reply);
+        };
+        (loadSeries ? loadSeries(message.key, message.request) : Promise.reject(new Error('This run cannot load other timeframes.')))
+          .then((candles) => answer({ type: 'series-response', id: message.id, candles }))
+          .catch((error: unknown) => answer({ type: 'series-response', id: message.id,
+            error: error instanceof Error ? error.message : String(error) }));
+        return;
+      }
       if (message.type === 'error' && message.id === null) {
         const error = new Error(`Pine live worker: ${message.message}`);
         markFailed(error);

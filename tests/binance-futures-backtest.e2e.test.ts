@@ -178,6 +178,125 @@ describe('Binance Futures HTTP route with user commission', () => {
     expect(fee.metrics.netProfit).toBeLessThan(zero.metrics.netProfit);
   });
 
+  it('honours strategy(process_orders_on_close=true): the entry fills at the close of the signal bar', async () => {
+    const run = async (onClose: boolean) => {
+      const script = source.replace('strategy("Manual fee control", overlay=true)',
+        `strategy("Manual fee control", overlay=true, process_orders_on_close=${onClose})`);
+      const response = await app.inject({ method: 'POST', url: '/api/backtests', payload: { ...payload(0), source: script } });
+      expect(response.statusCode, response.body).toBe(200);
+      return response.json().trades[0];
+    };
+    const nextOpen = await run(false);
+    const atClose = await run(true);
+    // Without the flag the order waits for the next bar (01:00); with it, it fills on bar 0 (00:00 bar) at its close.
+    expect(nextOpen.entryTime).toBe('2026-09-01T01:00:00.000Z');
+    expect(atClose.entryTime).toBe('2026-09-01T00:00:00.000Z');
+    expect(atClose.entryPrice).toBeCloseTo(80_006, 6);
+  });
+
+  it('runs Pine features added in PineTS 0.10-0.11 (once, ta.rci, ta.max, switch tuples, methods)', async () => {
+    const script = `//@version=6
+strategy("PineTS 0.11 features", overlay=true)
+method double(float x) => x * 2
+pick(int mode) =>
+    switch mode
+        1 => [close, 1]
+        => [open, 0]
+[price, flag] = pick(bar_index % 2)
+rci = ta.rci(close, 5)
+top = ta.max(high)
+once bar_index == 3
+    strategy.entry("Long", strategy.long)
+if bar_index == 6 and not na(rci) and top >= price and close.double() > 0 and flag >= 0
+    strategy.close_all()
+`;
+    const response = await app.inject({ method: 'POST', url: '/api/backtests', payload: { ...payload(0), source: script } });
+    expect(response.statusCode, response.body).toBe(200);
+    const trades = response.json().trades;
+    expect(trades).toHaveLength(1);
+    expect(trades[0].entryTime).toBe('2026-09-01T04:00:00.000Z');
+    expect(trades[0].exitTime).toBe('2026-09-01T07:00:00.000Z');
+  });
+
+  describe('request.security of the chart symbol', () => {
+    const run = async (body: string) => {
+      const script = `//@version=6\nstrategy("Security", overlay=true, pyramiding=5)\n${body}`;
+      const response = await app.inject({ method: 'POST', url: '/api/backtests', payload: { ...payload(0), pyramiding: 5, source: script } });
+      return response;
+    };
+    const signals = async (body: string) => {
+      const response = await run(body);
+      expect(response.statusCode, response.body).toBe(200);
+      return response.json().trades.map((trade: { entrySignal: string }) => trade.entrySignal);
+    };
+
+    it('reads a higher timeframe without looking ahead: the 4h close appears on its last hour', async () => {
+      // Fixture prices rise by 0.1 per minute from 80,000 at 2026-09-01 00:00 UTC.
+      expect(await signals(`h = request.security(syminfo.tickerid, "240", close)
+if bar_index >= 2 and bar_index <= 4
+    strategy.entry(str.tostring(h), strategy.long)
+if bar_index == 7
+    strategy.close_all()`)).toEqual(['80000', '80024', '80024']);
+    });
+
+    it('reports which candles request.security loaded', async () => {
+      const response = await run(`h = request.security(syminfo.tickerid, "120", close)
+if bar_index == 2
+    strategy.entry("L", strategy.long)`);
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json().warnings[0]).toMatch(/^request\.security: \d+ closed 120 candles of Binance Futures BTCUSDT, built from 1h/);
+    });
+
+    it('lets the form switch Fill Orders on Bar Close against the script', async () => {
+      const response = await app.inject({ method: 'POST', url: '/api/backtests', payload: { ...payload(0), processOrdersOnClose: true } });
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.json().configuration.processOrdersOnClose).toBe(true);
+      expect(response.json().trades[0].entryTime).toBe('2026-09-01T00:00:00.000Z');
+    });
+
+    it('builds a timeframe the exchange does not offer (2h) from 1h candles', async () => {
+      expect(await signals(`h = request.security(syminfo.tickerid, "120", close)
+if bar_index == 2 or bar_index == 3
+    strategy.entry(str.tostring(h), strategy.long)
+if bar_index == 7
+    strategy.close_all()`)).toEqual(['80012', '80024']);
+    });
+
+    it('serves request.security_lower_tf with the 15m candles inside each hour', async () => {
+      expect(await signals(`a = request.security_lower_tf(syminfo.tickerid, "15", close)
+if bar_index == 2
+    strategy.entry(str.tostring(array.size(a)) + "/" + str.tostring(array.last(a)), strategy.long)
+if bar_index == 7
+    strategy.close_all()`)).toEqual(['4/80018']);
+    });
+
+    it('ends inside a day: lookahead_off keeps yesterday, lookahead_on sees only closed hours of today', async () => {
+      const today = await buildApp({ historicalProvider: new BinanceFixture(), now: () => Date.parse('2026-09-01T04:30:00.000Z') });
+      try {
+        const lastSignal = async (lookahead: string) => {
+          const script = `//@version=6\nstrategy("Security", overlay=true)\nd = request.security(syminfo.tickerid, "D", close, lookahead=${lookahead})\nif bar_index == 1\n    strategy.entry(str.tostring(d), strategy.long)\nif bar_index == 2\n    strategy.close_all()\n`;
+          const response = await today.inject({ method: 'POST', url: '/api/backtests', payload: { ...payload(0), source: script } });
+          expect(response.statusCode, response.body).toBe(200);
+          return response.json().trades[0].entrySignal;
+        };
+        // The run ends at 04:00 inside the day. lookahead_off: yesterday's close. lookahead_on
+        // reads the day built from the closed hours up to 04:00 (like TradingView, lookahead_on
+        // shows the higher-timeframe bar's later values) but never any price after the run.
+        expect(await lastSignal('barmerge.lookahead_off')).toBe('80000');
+        expect(await lastSignal('barmerge.lookahead_on')).toBe('80024');
+      } finally { await today.close(); }
+    });
+
+    it('refuses another symbol with a clear message instead of using the chart', async () => {
+      const response = await run(`h = request.security("BINANCE:ETHUSDT", "240", close)
+if bar_index == 2
+    strategy.entry("L", strategy.long)`);
+      expect(response.statusCode).toBe(422);
+      expect(response.json()).toMatchObject({ kind: 'unsupported-feature' });
+      expect(response.json().error).toContain('request.security for another symbol (ETHUSDT) is not supported');
+    });
+  });
+
   it('warns when today contains only some completed parent bars', async () => {
     const currentApp = await buildApp({ historicalProvider: new BinanceFixture(), now: () => Date.parse('2026-09-01T04:30:00.000Z') });
     try {

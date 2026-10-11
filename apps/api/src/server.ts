@@ -19,6 +19,7 @@ import {
 import { BinanceFuturesHistoricalProvider } from '../../../packages/market-data/src/binance-futures-historical-provider.js';
 import { assertHighRunConfiguration, HighSafetyError } from '../../../packages/pine-runtime/src/high-safety.js';
 import {
+  BACKTEST_TIMEFRAME_MS,
   PINE_TIMEFRAME,
   PINETS_VERSION,
   type BacktestResponse,
@@ -34,6 +35,14 @@ import {
 } from '../../../packages/shared/src/venue-fee-schedule.js';
 import { CreateStrategySchema, SaveStrategyVersionSchema } from '../../../packages/shared/src/strategy-catalog-contracts.js';
 import { StrategyCatalogError, StrategyCatalogV1 } from './strategy-catalog.js';
+import {
+  aggregateCandles,
+  assertCompleteSeries,
+  MAX_SERIES_REQUEST_CANDLES,
+  SeriesRequestError,
+  seriesSourcePlan,
+  seriesWindow,
+} from '../../../packages/pine-runtime/src/series-requests.js';
 import { runPineWorker } from './worker-client.js';
 import { BinanceFuturesMarketListService } from './binance-futures-market-list.js';
 import { PaperExperimentControllerV1, type PaperExperimentRuntimeFactory } from './paper-execution/paper-experiment-controller.js';
@@ -784,6 +793,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       }
     }
 
+    const seriesNotes: string[] = [];
     const workerResult = await runPineWorker({
       source: parsed.data.source,
       candles: selected.candles,
@@ -815,8 +825,39 @@ export async function buildApp(options: BuildAppOptions = {}) {
         marginLongPercent: parsed.data.marginLongPercent,
         marginShortPercent: parsed.data.marginShortPercent,
         slippageTicks: parsed.data.slippageTicks,
+        processOrdersOnClose: parsed.data.processOrdersOnClose,
       },
-    }, abortController.signal);
+    }, abortController.signal, {
+      // request.security of this symbol on another timeframe: the same exchange's
+      // candles, checked for gaps like the chart's own.
+      loadSeries: async (request) => {
+        const window = seriesWindow(request);
+        const plan = seriesSourcePlan(request.timeframeMs);
+        const sourceCandles = (window.endExclusive - window.startInclusive) / BACKTEST_TIMEFRAME_MS[plan.interval];
+        if (sourceCandles > MAX_SERIES_REQUEST_CANDLES) {
+          throw new SeriesRequestError(`request.security on ${request.timeframe} needs ${sourceCandles.toLocaleString('en-US')} ${plan.interval} candles; the limit is ${MAX_SERIES_REQUEST_CANDLES.toLocaleString('en-US')}. Shorten the period.`);
+        }
+        const loaded = await historicalProvider.getCandles({
+          symbol, interval: plan.interval, ...window, signal: abortController.signal,
+        });
+        if (loaded.provenance.venue !== expectedVenue || loaded.provenance.symbol !== symbol) {
+          throw new SeriesRequestError('The candle source for request.security does not match the selected market.');
+        }
+        const candles = aggregateCandles(loaded.candles, request.timeframeMs, plan.factor);
+        assertCompleteSeries(candles, window, request.timeframeMs);
+        seriesNotes.push(bilingualMessage(
+          `request.security: ${candles.length} closed ${request.timeframe} candles of Binance Futures ${symbol}${plan.factor > 1 ? `, built from ${plan.interval}` : ''}, ${new Date(window.startInclusive).toISOString().slice(0, 10)} to ${new Date(window.endExclusive).toISOString().slice(0, 10)}.`,
+          `request.security: ${candles.length} закрытых свечей ${request.timeframe} Binance Futures ${symbol}${plan.factor > 1 ? `, собранных из ${plan.interval}` : ''}, с ${new Date(window.startInclusive).toISOString().slice(0, 10)} по ${new Date(window.endExclusive).toISOString().slice(0, 10)}.`,
+        ));
+        // A higher-timeframe bar still open at the chart's end is built from the chart's
+        // own candles only, so no later price reaches the script.
+        if (window.endExclusive < request.endExclusive && request.timeframeMs % intervalMs === 0) {
+          const tail = selected.candles.filter((candle) => candle.openTime >= window.endExclusive && candle.openTime < request.endExclusive);
+          candles.push(...aggregateCandles(tail, request.timeframeMs, request.timeframeMs / intervalMs, { allowSparse: true }));
+        }
+        return candles;
+      },
+    });
 
     if (!workerResult.ok) {
       finished = true;
@@ -895,7 +936,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
         calcOnEveryTick: parsed.data.calcOnEveryTick,
         calcOnEveryHistoryTick: parsed.data.calcOnEveryHistoryTick,
         limitOrderVerificationTicks: parsed.data.limitOrderVerificationTicks,
-        processOrdersOnClose: parsed.data.processOrdersOnClose,
+        processOrdersOnClose: workerResult.execution.processOrdersOnClose,
         timezone: 'UTC',
       },
       metrics: workerResult.metrics,
@@ -914,6 +955,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       },
       durationMs: Math.round(performance.now() - started),
       warnings: [
+        ...seriesNotes,
         bilingualMessage(
           'No gaps were found in the parent candles used; missing data is never replaced with synthetic candles.',
           'В использованных родительских свечах нет пропусков; пропуски не заменяются искусственными данными.',

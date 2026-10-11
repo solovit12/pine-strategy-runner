@@ -83,7 +83,8 @@ const BacktestRequestInputSchema = z.object({
   calcOnEveryTick: z.literal(false).default(false),
   calcOnEveryHistoryTick: z.literal(false).default(false),
   limitOrderVerificationTicks: z.literal(0).default(0),
-  processOrdersOnClose: z.literal(false).default(false),
+  /** Properties → Fill orders on bar close; absent keeps the script's strategy(process_orders_on_close). */
+  processOrdersOnClose: z.boolean().optional(),
 }).superRefine((value, context) => {
   if (value.exchange === 'Binance') {
     if (value.baseCurrency !== undefined && value.baseCurrency !== 'USDT') {
@@ -305,7 +306,7 @@ export interface BacktestResponse {
     calcOnEveryTick: false;
     calcOnEveryHistoryTick: false;
     limitOrderVerificationTicks: 0;
-    processOrdersOnClose: false;
+    processOrdersOnClose: boolean;
     timezone: 'UTC';
   };
   metrics: BacktestMetrics;
@@ -367,6 +368,7 @@ export interface WorkerRequest {
     marginLongPercent?: number;
     marginShortPercent?: number;
     slippageTicks: number;
+    processOrdersOnClose?: boolean;
   };
 }
 
@@ -388,6 +390,7 @@ export interface WorkerSuccess {
     commissionType: 'percent' | 'cash_per_contract' | 'cash_per_order';
     commissionValue: number;
     slippageTicks: number;
+    processOrdersOnClose: boolean;
     legacyMarginDefaultsApplied: boolean;
   };
 }

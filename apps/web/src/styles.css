@@ -470,3 +470,6 @@ tbody tr:hover { background: #141a1c; }
 .paper-run-overview .paper-run-detail-header { margin-bottom: 12px; }
 .paper-rules-block { margin-top: 18px; }
 .paper-rules-block h3 { margin: 0 0 10px; color: #dfe6e8; font-size: 16px; }
+.property-checkbox { display: flex !important; align-items: center; gap: 9px; align-self: end; min-height: 42px; cursor: pointer; }
+.property-checkbox input { width: 17px; height: 17px; margin: 0; accent-color: var(--green); }
+.property-checkbox > span { margin: 0 !important; }

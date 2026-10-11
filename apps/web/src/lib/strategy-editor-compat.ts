@@ -15,6 +15,5 @@ export function backtestSettingsSupportedByEditor(settings: StrategyBacktestSett
     && settings.calcOnOrderFills === false
     && settings.calcOnEveryTick === false
     && settings.calcOnEveryHistoryTick === false
-    && settings.limitOrderVerificationTicks === 0
-    && settings.processOrdersOnClose === false;
+    && settings.limitOrderVerificationTicks === 0;
 }

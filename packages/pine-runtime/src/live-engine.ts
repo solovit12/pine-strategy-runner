@@ -18,6 +18,8 @@ import {
 
 import type { Candle } from '../../shared/src/contracts.js';
 import { toPineSessionCandles } from './bar-index-origin.js';
+import { UnsupportedPineFeatureError } from './pine-source-safety.js';
+import { isChartSymbol } from './series-requests.js';
 import { pineSymbolInfo, type PineSymbolMarket } from './symbol-info.js';
 import { tradingViewStrategyDefaults } from './tradingview-defaults.js';
 
@@ -123,6 +125,8 @@ export interface PineLiveRunInput {
   readonly startMs: number;
   /** Real fills, any order; applied in time order inside their bars. */
   readonly fills: readonly PineLiveFill[];
+  /** Candles of another timeframe for request.security; absent means unsupported. */
+  readonly series?: (tickerId: string | undefined, timeframe: string, limit?: number) => Promise<readonly Candle[]>;
 }
 
 const EPS = 1e-9;
@@ -141,8 +145,24 @@ export async function runPineLive(input: PineLiveRunInput): Promise<PineLiveRunR
   if (input.candles.length === 0) throw new Error('Pine live run needs at least one closed candle.');
   const candles = toPineSessionCandles([...input.candles]);
   const symbolInfo = pineSymbolInfo(input.market);
+  let seriesFailure: Error | null = null;
+  // PineTS never settles a run whose secondary load failed; that failure ends the run.
+  let failRun: (error: Error) => void = () => undefined;
+  const failed = new Promise<never>((_, reject) => { failRun = reject; });
+  failed.catch(() => undefined);
   const source = {
-    async getMarketData() { return candles; },
+    async getMarketData(tickerId?: string, timeframe?: string, limit?: number) {
+      const chartSymbol = isChartSymbol(tickerId, input.market.symbol) || isChartSymbol(tickerId, input.market.tickerId);
+      if (chartSymbol && (!timeframe || timeframe === input.market.pineTimeframe)) return candles;
+      try {
+        if (!input.series) throw new UnsupportedPineFeatureError('request.security');
+        return toPineSessionCandles([...await input.series(tickerId, timeframe!, limit)]);
+      } catch (error) {
+        seriesFailure ??= error instanceof Error ? error : new Error(String(error));
+        failRun(seriesFailure);
+        throw error;
+      }
+    },
     async getSymbolInfo() { return symbolInfo; },
     configure() {},
   };
@@ -210,7 +230,9 @@ export async function runPineLive(input: PineLiveRunInput): Promise<PineLiveRunR
       outcomes.push({ fill, applied: result.applied, ...(result.reason ? { reason: result.reason } : {}) });
     }
   });
-  const context = await pine.run(indicator) as unknown as { strategy?: any; idx: number };
+  const context = await Promise.race([pine.run(indicator), failed]) as unknown as { strategy?: any; idx: number };
+  // The engine does not always pass a failed secondary load on; never trade on a run without it.
+  if (seriesFailure) throw seriesFailure;
   if (!context.strategy) throw new Error('The Pine script did not declare a strategy. Use strategy(...), not indicator(...).');
   while (fillIndex < fills.length) {
     outcomes.push({ fill: fills[fillIndex]!, applied: false, reason: 'after_last_bar' });

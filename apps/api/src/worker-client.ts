@@ -1,10 +1,14 @@
 import { fork } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import type { WorkerRequest, WorkerResponse } from '../../../packages/shared/src/contracts.js';
+import type { Candle, WorkerRequest, WorkerResponse } from '../../../packages/shared/src/contracts.js';
+import type { SeriesRequest } from '../../../packages/pine-runtime/src/series-requests.js';
+import type { SeriesRequestMessage, SeriesResponseMessage } from './pine-worker.js';
 
 export interface PineWorkerRunOptions {
   timeoutMs?: number;
   memoryMb?: number;
+  /** Loads another timeframe of the chart's symbol for request.security. */
+  loadSeries?: (request: SeriesRequest) => Promise<Candle[]>;
 }
 
 export function runPineWorker(
@@ -48,10 +52,16 @@ export function runPineWorker(
       error.name = 'AbortError';
       reject(error);
     });
-    const timer = setTimeout(() => finish(() => {
+    // Loading request.security candles does not count against the Pine time limit.
+    let remainingMs = timeoutMs;
+    let startedAt = Date.now();
+    const expire = () => finish(() => {
       child.kill();
       reject(new Error(`Backtest exceeded the ${timeoutMs} ms worker limit.`));
-    }), timeoutMs);
+    });
+    let timer = setTimeout(expire, remainingMs);
+    const pauseTimer = () => { clearTimeout(timer); remainingMs -= Date.now() - startedAt; };
+    const resumeTimer = () => { startedAt = Date.now(); timer = setTimeout(expire, Math.max(remainingMs, 0)); };
 
     signal?.addEventListener('abort', abort, { once: true });
     if (signal?.aborted) {
@@ -64,10 +74,23 @@ export function runPineWorker(
         finish(() => reject(new Error(`Pine worker exited (${code ?? childSignal}). ${stderr}`.trim())));
       }
     });
-    child.once('message', (message: WorkerResponse) => finish(() => {
-      child.disconnect();
-      resolve(message);
-    }));
+    child.on('message', (message: WorkerResponse | SeriesRequestMessage) => {
+      if ('type' in message && message.type === 'series-request') {
+        const reply = (response: SeriesResponseMessage) => { if (!settled) { resumeTimer(); child.send(response); } };
+        pauseTimer();
+        (options.loadSeries
+          ? options.loadSeries(message.request)
+          : Promise.reject(new Error('This run cannot load other timeframes.')))
+          .then((candles) => reply({ type: 'series-response', id: message.id, candles }))
+          .catch((error: unknown) => reply({ type: 'series-response', id: message.id,
+            error: error instanceof Error ? error.message : String(error) }));
+        return;
+      }
+      finish(() => {
+        child.disconnect();
+        resolve(message as WorkerResponse);
+      });
+    });
     child.send(payload, (error) => {
       if (error) finish(() => reject(error));
     });

@@ -9,6 +9,7 @@ export interface StrategyDeclarationProperties {
   readonly defaultOrderSizeValue?: number;
   readonly pyramiding?: number;
   readonly commissionPercent?: number;
+  readonly processOrdersOnClose?: boolean;
 }
 
 const NUMBER = /^[+-]?(?:\d+\.?\d*|\.\d+)(?:[eE][+-]?\d+)?$/;
@@ -74,6 +75,8 @@ export function strategyDeclarationProperties(source: string): StrategyDeclarati
   if (pyramiding !== undefined && Number.isInteger(pyramiding) && pyramiding >= 0) result.pyramiding = pyramiding;
   const commission = number('commission_value');
   if (percentCommission && commission !== undefined && commission >= 0) result.commissionPercent = commission;
+  const onClose = named.get('process_orders_on_close');
+  if (onClose === 'true' || onClose === 'false') result.processOrdersOnClose = onClose === 'true';
   return result;
 }
 

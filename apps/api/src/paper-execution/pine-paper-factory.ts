@@ -32,6 +32,7 @@ import { NautilusPaperLedger, type NautilusPaperMessageV1 } from './nautilus-pap
 import {
   NAUTILUS_FAST_PAPER_VERSION, NAUTILUS_PAPER_VERSION, assertNoLiveNautilusProcess, checkNautilusRuntime, isFatalNautilusLogLine, ownedNautilusRuns,
 } from './nautilus-process.js';
+import { aggregateCandles, seriesSourcePlan, seriesWindow, type SeriesRequest } from '../../../../packages/pine-runtime/src/series-requests.js';
 import { PineLiveClient } from './pine-live-client.js';
 import { fetchClosedCandles, fetchVenueCatalog, pineMintick, type PaperVenueKey, type VenueMarket } from './venue-markets.js';
 
@@ -521,7 +522,20 @@ export function createPinePaperFactory(options: PinePaperFactoryOptions): PaperE
       if (!actor.python) {
       // One Pine worker per run; per venue the Pine commission follows that venue's fee.
       const execution = executionSettings(backtest, settings, actor.tracks[0]!.venue);
-      actor.pine = new PineLiveClient(actor.snapshot.source, execution, startMs);
+      // request.security history: loaded once per timeframe from the track's own exchange.
+      const loadSeries = async (key: string, request: SeriesRequest): Promise<Candle[]> => {
+        const track = actor.tracks.find(row => row.key === key);
+        if (!track) throw new Error(`Unknown Paper track ${key}.`);
+        const window = seriesWindow(request);
+        const plan = seriesSourcePlan(request.timeframeMs);
+        const loaded = await candlesFor(track.market, { ...settings, timeframe: plan.interval as typeof settings.timeframe },
+          window.startInclusive, window.endExclusive, actor.abort.signal);
+        const candles = aggregateCandles(loaded, request.timeframeMs, plan.factor, { allowSparse: true });
+        record(actor, { type: 'event', venue: track.display, market: track.market.market,
+          message: `Loaded ${candles.length} closed ${request.timeframe} candles for request.security.` });
+        return candles;
+      };
+      actor.pine = new PineLiveClient(actor.snapshot.source, execution, startMs, undefined, loadSeries);
       await actor.pine.ready();
       }
       for (const { track, candles } of actor.python ? [] : history) {

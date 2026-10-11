@@ -83,7 +83,6 @@ export function assertHighRunConfiguration(configuration: HighRunConfiguration):
     configuration.calcOnOrderFills
     || configuration.calcOnEveryTick
     || configuration.calcOnEveryHistoryTick
-    || configuration.processOrdersOnClose
   ) {
     throw new HighSafetyError(
       'HIGH_UNSUPPORTED_SCRIPT_EXECUTION',
@@ -92,7 +91,6 @@ export function assertHighRunConfiguration(configuration: HighRunConfiguration):
         calcOnOrderFills: configuration.calcOnOrderFills,
         calcOnEveryTick: configuration.calcOnEveryTick,
         calcOnEveryHistoryTick: configuration.calcOnEveryHistoryTick,
-        processOrdersOnClose: configuration.processOrdersOnClose ?? false,
       },
     );
   }

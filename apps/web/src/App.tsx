@@ -48,6 +48,7 @@ type EditorSnapshot = {
   longLeverage: string;
   shortLeverage: string;
   slippageTicks: number;
+  processOrdersOnClose: boolean;
   strategyName: string;
   selectedStrategyId: string;
   loadedStrategy: StrategyDetail | null;
@@ -181,6 +182,7 @@ export function App() {
   const [longLeverage, setLongLeverage] = useState('Auto');
   const [shortLeverage, setShortLeverage] = useState('Auto');
   const [slippageTicks, setSlippageTicks] = useState(0);
+  const [processOrdersOnClose, setProcessOrdersOnClose] = useState(false);
   const [result, setResult] = useState<BacktestResponse | null>(null);
   const [state, setState] = useState<RunState>('loading-preset');
   const [error, setError] = useState('');
@@ -206,6 +208,7 @@ export function App() {
     if (changed.defaultOrderSizeValue !== undefined) setDefaultOrderSizeValue(changed.defaultOrderSizeValue);
     if (changed.pyramiding !== undefined) setPyramiding(changed.pyramiding);
     if (changed.commissionPercent !== undefined) setCommissionValueInput(String(changed.commissionPercent));
+    if (changed.processOrdersOnClose !== undefined) setProcessOrdersOnClose(changed.processOrdersOnClose);
   }, [source]);
 
   useEffect(() => {
@@ -221,6 +224,7 @@ export function App() {
       setDefaultOrderSizeType(loaded.configuration.defaultOrderSizeType);
       setPyramiding(loaded.configuration.pyramiding);
       setSlippageTicks(loaded.configuration.slippageTicks);
+      setProcessOrdersOnClose(strategyDeclarationProperties(loaded.source).processOrdersOnClose ?? false);
       setState('ready');
     }).catch((reason: Error) => {
       setError(reason.message);
@@ -346,7 +350,7 @@ export function App() {
       feeModel: 'manual',
       commissionType: 'percent', commissionValue, marginLongPercent, marginShortPercent, slippageTicks,
       barDetailization, calcOnOrderFills: false, calcOnEveryTick: false,
-      calcOnEveryHistoryTick: false, limitOrderVerificationTicks: 0, processOrdersOnClose: false,
+      calcOnEveryHistoryTick: false, limitOrderVerificationTicks: 0, processOrdersOnClose,
     };
   };
 
@@ -428,6 +432,7 @@ export function App() {
     setLongLeverage(settings.marginLongPercent === undefined ? 'Auto' : formatLeverage(settings.marginLongPercent));
     setShortLeverage(settings.marginShortPercent === undefined ? 'Auto' : formatLeverage(settings.marginShortPercent));
     setSlippageTicks(settings.slippageTicks);
+    setProcessOrdersOnClose(settings.processOrdersOnClose ?? strategyDeclarationProperties(detail.version.source).processOrdersOnClose ?? false);
     setResult(null);
     setLastBacktestedRequest(null);
     setError('');
@@ -450,6 +455,7 @@ export function App() {
     setLongLeverage(previousEditor.longLeverage);
     setShortLeverage(previousEditor.shortLeverage);
     setSlippageTicks(previousEditor.slippageTicks);
+    setProcessOrdersOnClose(previousEditor.processOrdersOnClose);
     setStrategyName(previousEditor.strategyName);
     setSelectedStrategyId(previousEditor.selectedStrategyId);
     setLoadedStrategy(previousEditor.loadedStrategy);
@@ -486,7 +492,7 @@ export function App() {
     const snapshot: EditorSnapshot = {
       source, symbol, timeframe, startDate, endDate, initialCapital,
       defaultOrderSizeValue, defaultOrderSizeType, pyramiding, commissionValueInput,
-      longLeverage, shortLeverage, slippageTicks, strategyName, selectedStrategyId,
+      longLeverage, shortLeverage, slippageTicks, processOrdersOnClose, strategyName, selectedStrategyId,
       loadedStrategy, paperStrategy, result, lastBacktestedRequest, state, error,
     };
     setPreviousEditors((items) => [...items, snapshot].slice(-3));
@@ -759,6 +765,7 @@ export function App() {
               <label><span>Long Leverage <InfoTooltip label="long leverage" en="Auto reads margin_long from the Pine code." ru="Auto берёт margin_long из Pine-кода." /></span><input value={longLeverage} onChange={(event) => setLongLeverage(event.target.value)} placeholder="Auto / Infinity / 20" disabled={state === 'running'} /></label>
               <label><span>Short Leverage <InfoTooltip label="short leverage" en="20 means 5% margin; Infinity means 0%." ru="20 означает маржу 5%; Infinity означает 0%." /></span><input value={shortLeverage} onChange={(event) => setShortLeverage(event.target.value)} placeholder="Auto / Infinity / 20" disabled={state === 'running'} /></label>
               <label><span>Slippage <InfoTooltip label="slippage" en="Price worsening applied to market and stop orders." ru="Ухудшение цены для рыночных и стоп-заявок." /></span><div className="input-suffix"><input type="number" min="0" step="1" value={slippageTicks} onChange={(event) => setSlippageTicks(Number(event.target.value))} disabled={state === 'running'} /><span>ticks</span></div></label>
+              <label className="property-checkbox"><input type="checkbox" checked={processOrdersOnClose} onChange={(event) => setProcessOrdersOnClose(event.target.checked)} disabled={state === 'running'} /><span>Fill Orders on Bar Close <InfoTooltip label="fill orders on bar close" en="Like TradingView's Properties → Fill orders: On bar close. Market orders fill at the close of the candle that placed them instead of the next candle's open. Starts from process_orders_on_close in the script's strategy(...)." ru="Как в TradingView: Properties → Fill orders: On bar close. Рыночные заявки исполняются по закрытию свечи, на которой они выставлены, а не на открытии следующей. Начальное значение берётся из process_orders_on_close в strategy(...) скрипта." /></span></label>
             </div>
           </section>
         </div>

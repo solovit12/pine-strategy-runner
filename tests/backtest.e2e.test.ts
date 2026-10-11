@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   buildApp,
@@ -11,6 +12,9 @@ import {
   type HistoricalMarketDataResult,
 } from '../packages/market-data/src/historical-market-data-provider';
 import type { Candle } from '../packages/shared/src/contracts';
+
+/** The former editor example; the app now ships without strategies, so tests keep it as a fixture. */
+const buyAndHold = readFileSync(new URL('./fixtures/qualification/strategies/13-binance-futures-buy-and-hold.pine', import.meta.url), 'utf8');
 
 function minutePrice(openTime: number): number {
   return 100 + (Math.floor(openTime / 60_000) % 1_000) / 100;
@@ -114,7 +118,7 @@ describe('0xArchive Hyperliquid HTTP vertical slice', () => {
   });
   afterAll(async () => { await app.close(); });
 
-  it('loads the Binance Futures preset and reports the public active source', async () => {
+  it('starts the editor from an empty strategy template and reports the public active source', async () => {
     const health = await app.inject({ method: 'GET', url: '/api/health' });
     expect(health.statusCode).toBe(200);
     expect(health.json().historicalData).toEqual({
@@ -132,8 +136,9 @@ describe('0xArchive Hyperliquid HTTP vertical slice', () => {
 
     const presetResponse = await app.inject({ method: 'GET', url: '/api/preset' });
     expect(presetResponse.statusCode).toBe(200);
+    expect(presetResponse.json().source).toContain('strategy("My strategy"');
     expect(presetResponse.json()).toMatchObject({
-      id: 'BN01',
+      id: 'TEMPLATE',
       configuration: {
         exchange: 'Binance',
         marketType: 'Perpetual',
@@ -147,18 +152,17 @@ describe('0xArchive Hyperliquid HTTP vertical slice', () => {
   });
 
   it('runs Pine on parent bars and checks execution on every 0xArchive minute', async () => {
-    const preset = (await app.inject({ method: 'GET', url: '/api/preset' })).json();
     const response = await app.inject({
       method: 'POST',
       url: '/api/backtests',
       payload: {
-        source: preset.source,
+        source: buyAndHold,
         exchange: 'Hyperliquid',
         marketType: 'Perpetual',
         symbol: 'BTC',
         timeframe: '1h',
         barIndexOffset: 0,
-        dateRange: preset.configuration.dateRange,
+        dateRange: { start: '2026-09-01', end: '2026-09-07' },
         initialCapital: 100_000,
         baseCurrency: 'USDC',
         defaultOrderSizeValue: 0.01,
@@ -233,12 +237,11 @@ describe('0xArchive Hyperliquid HTTP vertical slice', () => {
       now: () => Date.parse('2026-09-18T00:00:00.000Z'),
     });
     try {
-      const preset = (await brokenApp.inject({ method: 'GET', url: '/api/preset' })).json();
       const response = await brokenApp.inject({
         method: 'POST',
         url: '/api/backtests',
         payload: {
-          source: preset.source,
+          source: buyAndHold,
           exchange: 'Hyperliquid',
           marketType: 'Perpetual',
           symbol: 'BTC',
@@ -271,12 +274,11 @@ describe('0xArchive Hyperliquid HTTP vertical slice', () => {
       maxExecutionMinutes: 1_000,
     });
     try {
-      const preset = (await limitedApp.inject({ method: 'GET', url: '/api/preset' })).json();
       const response = await limitedApp.inject({
         method: 'POST',
         url: '/api/backtests',
         payload: {
-          source: preset.source,
+          source: buyAndHold,
           exchange: 'Hyperliquid',
           marketType: 'Perpetual',
           symbol: 'BTC',

@@ -314,7 +314,7 @@ export interface BacktestResponse {
 }
 
 export interface PresetResponse {
-  id: 'BN01';
+  id: 'TEMPLATE';
   name: string;
   source: string;
   sourceSha256: string;

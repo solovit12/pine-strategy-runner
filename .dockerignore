@@ -2,7 +2,7 @@
 node_modules
 dist
 coverage
-qualification/tradingview
+tests/fixtures/qualification
 *.log
 .local
 undefined

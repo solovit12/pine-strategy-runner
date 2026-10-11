@@ -163,7 +163,7 @@ describe('OX03 Hyperliquid minute bracket SL-first control', () => {
 
   beforeAll(async () => {
     source = await readFile(
-      path.join(process.cwd(), 'qualification', 'strategies', '11-oxarchive-minute-bracket-sl-first.pine'),
+      path.join(process.cwd(), 'tests', 'fixtures', 'qualification', 'strategies', '11-oxarchive-minute-bracket-sl-first.pine'),
       'utf8',
     );
     app = await buildApp({

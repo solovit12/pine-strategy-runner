@@ -630,11 +630,10 @@ export function App() {
   }), []);
   const sourceVersion = source.match(/^\s*\/\/@version\s*=\s*(\d+)/m)?.[1] || '?';
   const selectedDays = inclusiveUtcDays(startDate, endDate);
-  const isPresetSource = Boolean(preset && source === preset.source);
   const dateRangeCopy = selectedDays !== null && selectedDays > 0
     ? {
-      en: `${selectedDays} selected calendar days. Historical dates are available; for today, only closed candles are used.${isPresetSource ? ' BN01 opens positions from 1 through 6 September 2026; 7 September is its exclusive end boundary. Change START_TIME and END_TIME in Pine for another trading window.' : ''}`,
-      ru: `Выбрано календарных дней: ${selectedDays}. Старые даты доступны; за сегодня используются только закрытые свечи.${isPresetSource ? ' BN01 открывает позиции с 1 по 6 сентября 2026; 7 сентября — исключительная граница окончания. Для другого торгового периода измените START_TIME и END_TIME в Pine.' : ''}`,
+      en: `${selectedDays} selected calendar days. Historical dates are available; for today, only closed candles are used.`,
+      ru: `Выбрано календарных дней: ${selectedDays}. Старые даты доступны; за сегодня используются только закрытые свечи.`,
     }
     : { en: 'Select a valid date range.', ru: 'Выберите корректный период.' };
   const runDetailCopy = result
@@ -695,7 +694,7 @@ export function App() {
         <div className="editor-panel">
           <div className="panel-heading">
             <div><span className="eyebrow">SOURCE · PINE V{sourceVersion}</span><h2>Strategy Editor</h2></div>
-            <span className="file-chip">{preset && source === preset.source ? 'preset_strategy.pine' : 'user_strategy.pine'}</span>
+            <span className="file-chip">strategy.pine</span>
           </div>
           {catalogEnabled && <div className="strategy-library">
             <div className="strategy-library-summary">

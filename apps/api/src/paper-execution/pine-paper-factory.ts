@@ -61,7 +61,7 @@ export interface PythonStrategyInfo {
     choices: unknown[] | null; label: string; help: string }>;
 }
 
-/** Strategies of the built-in example pack and of every configured private pack. */
+/** Strategies of every configured private pack. */
 export async function listPythonStrategies(python: string, projectRoot: string, packs: readonly string[]):
   Promise<{ strategies: PythonStrategyInfo[]; errors: { pack: string; module: string; error: string }[] }> {
   const script = path.join(projectRoot, 'apps/nautilus-paper/list_strategies.py');

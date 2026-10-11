@@ -1,6 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { existsSync, realpathSync } from 'node:fs';
-import { readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import fastifyStatic from '@fastify/static';
@@ -48,7 +47,12 @@ import {
 } from './engine-proxy.js';
 
 const projectRoot = process.cwd();
-const bn01Path = path.join(projectRoot, 'qualification', 'strategies', '13-binance-futures-buy-and-hold.pine');
+/** The editor starts from this template; the app ships without bundled strategies. */
+const STRATEGY_TEMPLATE = `//@version=6
+strategy("My strategy", overlay=true)
+
+// Paste your TradingView strategy here, replacing these lines.
+`;
 const DAY_MS = 24 * 60 * 60 * 1_000;
 export const DEFAULT_MAX_BACKTEST_EXECUTION_MINUTES = 120 * 24 * 60;
 export const MAX_BACKTEST_EXECUTION_MINUTES = 189 * 24 * 60;
@@ -341,10 +345,13 @@ export async function buildApp(options: BuildAppOptions = {}) {
   });
 
   app.get('/api/preset', async (): Promise<PresetResponse> => {
-    const source = await readFile(bn01Path, 'utf8');
+    const source = STRATEGY_TEMPLATE;
+    // The last 30 full UTC days.
+    const today = new Date(now()).toISOString().slice(0, 10);
+    const day = (offset: number) => new Date(Date.parse(`${today}T00:00:00Z`) + offset * 86_400_000).toISOString().slice(0, 10);
     return {
-      id: 'BN01',
-      name: 'BN01 Binance Futures Buy and Hold',
+      id: 'TEMPLATE',
+      name: 'My strategy',
       source,
       sourceSha256: sha256(source),
       configuration: {
@@ -352,7 +359,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
         marketType: 'Perpetual',
         symbol: 'BTCUSDT',
         timeframe: '1h',
-        dateRange: { start: '2026-09-01', end: '2026-09-07' },
+        dateRange: { start: day(-30), end: day(-1) },
         initialCapital: 100_000,
         baseCurrency: 'USDT',
         defaultOrderSizeValue: 0.01,

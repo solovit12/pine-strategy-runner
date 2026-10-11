@@ -196,7 +196,7 @@ class RunnerTest(unittest.TestCase):
 
 
 class PackTest(unittest.TestCase):
-    def test_builtin_examples_and_private_pack(self):
+    def test_private_pack(self):
         with tempfile.TemporaryDirectory() as tmp:
             pack = Path(tmp) / "my_private"
             pack.mkdir()
@@ -205,9 +205,7 @@ class PackTest(unittest.TestCase):
             (pack / "broken.py").write_text("raise ImportError('nope')\n")
             rows, errors = discover([str(pack)])
             ids = {row["id"] for row in rows}
-            self.assertIn("examples/ema_cross:EmaCross", ids)
-            self.assertIn("examples/channel_breakout:ChannelBreakout", ids)
-            self.assertIn("my_private/secret:Edge", ids)
+            self.assertEqual(ids, {"my_private/secret:Edge"})
             self.assertEqual(errors[0]["module"], "broken")
             cls, digest = load_strategy("my_private/secret:Edge", [str(pack)])
             self.assertEqual((cls.name, len(digest)), ("Edge", 64))

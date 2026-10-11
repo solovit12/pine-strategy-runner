@@ -120,7 +120,7 @@ export interface PythonStrategyInfo {
   params: Record<string, PythonStrategyParam>;
 }
 
-/** Python strategies of the built-in example pack and the owner's private packs. */
+/** Python strategies of the owner's private packs. */
 export async function loadPythonStrategies(signal?: AbortSignal): Promise<{ strategies: PythonStrategyInfo[];
   errors: { pack: string; module: string; error: string }[]; packsConfigured: number }> {
   return parse(await fetch('/api/python-strategies', { signal }));

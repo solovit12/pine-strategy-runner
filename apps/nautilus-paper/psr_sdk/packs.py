@@ -4,7 +4,7 @@ A pack is any directory. Every top-level module (`*.py`) or package (folder
 with `__init__.py`) in it is imported, and each `Strategy` subclass defined
 there becomes available as `<pack>/<module>:<Class>`. The pack name is the
 folder name. Packs are configured with PSR_STRATEGY_PACKS (paths separated by
-the OS path separator); the open example pack ships with the service.
+the OS path separator); no pack ships with the service.
 
 Private packs stay outside the public repository: only their path is configured.
 """
@@ -21,16 +21,15 @@ from .api import Strategy, describe_strategy
 
 NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]{0,63}$")
 ROOT = "psr_packs"
-BUILTIN_PACK = Path(__file__).resolve().parent.parent / "strategies"
 
 
 def pack_dirs(paths):
     result = {}
-    for raw in [BUILTIN_PACK, *(paths or [])]:
+    for raw in paths or []:
         path = Path(raw).expanduser().resolve()
         if not path.is_dir():
             raise ValueError(f"strategy pack is not a directory: {raw}")
-        name = path.name if path != BUILTIN_PACK else "examples"
+        name = path.name
         if not NAME_RE.fullmatch(name):
             raise ValueError(f"strategy pack folder name must be a Python identifier: {path.name}")
         if name in result and result[name] != path:
@@ -93,7 +92,7 @@ def discover(paths=None):
                 module = importlib.import_module(f"{package}.{module_name}")
                 for cls in _strategies(module):
                     rows.append({"id": f"{name}/{module_name}:{cls.__name__}", "pack": name,
-                                 "builtin": path == BUILTIN_PACK, "packSha256": digest, **describe_strategy(cls)})
+                                 "builtin": False, "packSha256": digest, **describe_strategy(cls)})
             except Exception as exc:  # noqa: BLE001 - surface any import problem to the user
                 errors.append({"pack": name, "module": module_name, "error": f"{type(exc).__name__}: {exc}"[:500]})
     return rows, errors

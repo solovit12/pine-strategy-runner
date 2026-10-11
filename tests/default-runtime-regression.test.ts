@@ -38,8 +38,8 @@ interface ExpectedTrade {
 
 const dataBase = 'binance-btcusdt-1h-20170817T040000Z-20260901T020000Z';
 const provider = new FrozenCsvMarketDataProvider(
-  fileURLToPath(new URL(`../qualification/data/${dataBase}.csv`, import.meta.url)),
-  fileURLToPath(new URL(`../qualification/data/${dataBase}.metadata.json`, import.meta.url)),
+  fileURLToPath(new URL(`./fixtures/qualification/data/${dataBase}.csv`, import.meta.url)),
+  fileURLToPath(new URL(`./fixtures/qualification/data/${dataBase}.metadata.json`, import.meta.url)),
 );
 
 const round2 = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100;
@@ -86,11 +86,11 @@ describe('H3 Default runtime regression', () => {
   beforeAll(async () => {
     candles = (await provider.getSnapshot()).candles;
     summaries = JSON.parse(await readFile(
-      new URL('../qualification/expected/tradingview-summary.json', import.meta.url),
+      new URL('./fixtures/qualification/expected/tradingview-summary.json', import.meta.url),
       'utf8',
     )).reports;
     const tradeReports = JSON.parse(await readFile(
-      new URL('../qualification/expected/tradingview-trades.json', import.meta.url),
+      new URL('./fixtures/qualification/expected/tradingview-trades.json', import.meta.url),
       'utf8',
     )).reports as Array<{ id: string; trades: ExpectedTrade[] }>;
     expectedTrades = new Map(tradeReports.map((report) => [report.id, report.trades]));
@@ -104,7 +104,7 @@ describe('H3 Default runtime regression', () => {
 
     for (const expected of summaries) {
       const source = await readFile(
-        new URL(`../qualification/strategies/${expected.strategyFile.split('/').at(-1)}`, import.meta.url),
+        new URL(`./fixtures/qualification/strategies/${expected.strategyFile.split('/').at(-1)}`, import.meta.url),
         'utf8',
       );
       const actual = await runDefault(source, window, {
@@ -144,11 +144,11 @@ describe('H3 Default runtime regression', () => {
 
   it('R07 keeps the frozen Q08 Default regression unchanged', async () => {
     const source = await readFile(
-      new URL('../qualification/strategies/08-high-low-channel.pine', import.meta.url),
+      new URL('./fixtures/qualification/strategies/08-high-low-channel.pine', import.meta.url),
       'utf8',
     );
     const expected = JSON.parse(await readFile(
-      new URL('../qualification/expected/high-low-channel-regression.json', import.meta.url),
+      new URL('./fixtures/qualification/expected/high-low-channel-regression.json', import.meta.url),
       'utf8',
     )).frozenLocalRegression;
     const window = selectedCandles(candles, '2025-01-01', '2026-09-01');

@@ -117,14 +117,6 @@ const executionExamples: Record<BacktestTimeframe, { en: string; ru: string }> =
     ru: 'В понедельник в 00:00 UTC стратегия принимает решение по закрытой недельной свече. Рыночный вход начинается на открытии новой недели. Стоп может сработать в среду. Следующий расчёт стратегии — в 00:00 UTC следующего понедельника.',
   },
 };
-const runStateLabels: Record<RunState, { en: string; ru: string }> = {
-  'loading-preset': { en: 'Ready to execute', ru: 'Готово к запуску' },
-  ready: { en: 'Ready to execute', ru: 'Готово к запуску' },
-  running: { en: 'Backtest running', ru: 'Бэктест выполняется' },
-  success: { en: 'Run complete', ru: 'Расчёт завершён' },
-  error: { en: 'Run failed', ru: 'Ошибка запуска' },
-  stopped: { en: 'Run stopped', ru: 'Расчёт остановлен' },
-};
 
 function bilingual(en: string, ru: string): string {
   return `${en} / ${ru}`;
@@ -636,12 +628,6 @@ export function App() {
       ru: `Выбрано календарных дней: ${selectedDays}. Старые даты доступны; за сегодня используются только закрытые свечи.`,
     }
     : { en: 'Select a valid date range.', ru: 'Выберите корректный период.' };
-  const runDetailCopy = result
-    ? {
-      en: `${result.data.bars.toLocaleString('en-US')} bars · ${result.durationMs} ms`,
-      ru: `${result.data.bars.toLocaleString('ru-RU')} свечей · ${result.durationMs} мс`,
-    }
-    : { en: 'Binance Futures · historical candles', ru: 'Binance Futures · исторические свечи' };
   const errorCopy = splitBilingual(error);
   const runtimeCopy = result
     ? { en: `${result.runtime.name} ${result.runtime.version} · child process`, ru: `${result.runtime.name} ${result.runtime.version} · дочерний процесс` }
@@ -745,11 +731,6 @@ export function App() {
           <label className="date-range-end"><span>To · UTC · inclusive <InfoTooltip label="date range" en={dateRangeCopy.en} ru={dateRangeCopy.ru} alignRight /></span><input type="date" max={new Date().toISOString().slice(0, 10)} value={endDate} onChange={(event) => setEndDate(event.target.value)} disabled={state === 'running'} /></label>
         </div>
         <div className="run-zone">
-          <div className="run-copy">
-            <span className={`run-dot ${state}`} />
-            <div><strong>{runStateLabels[state].en}</strong>
-            <small>{runDetailCopy.en}</small></div>
-          </div>
           {state === 'running' ? (
             <button className="stop-button" onClick={() => stop()}><Square size={15} fill="currentColor" />Stop</button>
           ) : (

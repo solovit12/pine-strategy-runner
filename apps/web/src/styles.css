@@ -130,15 +130,7 @@ button { border: 0; }
 .settings-grid input:not([readonly]):focus { border-color: var(--amber); }
 .settings-grid input:disabled { cursor: wait; opacity: .65; }
 .settings-grid input[type="date"] { color-scheme: dark; }
-.run-zone { min-width: 320px; padding: 13px 16px; display: flex; flex-wrap: wrap; align-items: center; gap: 18px; border-left: 1px solid var(--line); }
-.run-copy { display: flex; align-items: center; gap: 9px; min-width: 130px; margin-right: auto; }
-.run-copy strong, .run-copy small { display: block; }
-.run-copy strong { color: #cad1d4; font-size: 15px; }
-.run-copy small { margin-top: 4px; color: #9aa7ac; font-size: 13px; line-height: 1.35; }
-.run-dot { width: 7px; height: 7px; background: #6f7b80; box-shadow: 0 0 0 3px #252d30; }
-.run-dot.running { background: var(--amber); box-shadow: 0 0 0 3px #44351f; animation: pulse 1s infinite; }
-.run-dot.success { background: var(--green); box-shadow: 0 0 0 3px #19382a; }
-.run-dot.error { background: var(--red); box-shadow: 0 0 0 3px #3b2022; }
+.run-zone { min-width: 320px; padding: 13px 16px; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 18px; border-left: 1px solid var(--line); }
 @keyframes pulse { 50% { opacity: .35; } }
 .run-button, .stop-button { min-height: 44px; min-width: 156px; padding: 8px 15px; display: inline-flex; align-items: center; justify-content: center; gap: 8px; cursor: pointer; font: 750 14px/1.3 "Cascadia Code", Consolas, monospace; letter-spacing: .02em; }
 .run-button { color: #07110c; background: var(--green); }

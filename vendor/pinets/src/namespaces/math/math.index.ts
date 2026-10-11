@@ -2,6 +2,7 @@
 // This file is auto-generated. Do not edit manually.
 // Run: npm run generate:math-index
 
+import { __and } from './methods/__and';
 import { __eq } from './methods/__eq';
 import { __ge } from './methods/__ge';
 import { __gt } from './methods/__gt';
@@ -9,6 +10,7 @@ import { __idiv } from './methods/__idiv';
 import { __le } from './methods/__le';
 import { __lt } from './methods/__lt';
 import { __neq } from './methods/__neq';
+import { __or } from './methods/__or';
 import { abs } from './methods/abs';
 import { acos } from './methods/acos';
 import { asin } from './methods/asin';
@@ -41,6 +43,7 @@ import { todegrees } from './methods/todegrees';
 import { toradians } from './methods/toradians';
 
 const methods = {
+  __and,
   __eq,
   __ge,
   __gt,
@@ -48,6 +51,7 @@ const methods = {
   __le,
   __lt,
   __neq,
+  __or,
   abs,
   acos,
   asin,
@@ -82,6 +86,7 @@ const methods = {
 
 export class PineMath {
   private _cache = {};
+  __and: ReturnType<typeof methods.__and>;
   __eq: ReturnType<typeof methods.__eq>;
   __ge: ReturnType<typeof methods.__ge>;
   __gt: ReturnType<typeof methods.__gt>;
@@ -89,6 +94,7 @@ export class PineMath {
   __le: ReturnType<typeof methods.__le>;
   __lt: ReturnType<typeof methods.__lt>;
   __neq: ReturnType<typeof methods.__neq>;
+  __or: ReturnType<typeof methods.__or>;
   abs: ReturnType<typeof methods.abs>;
   acos: ReturnType<typeof methods.acos>;
   asin: ReturnType<typeof methods.asin>;

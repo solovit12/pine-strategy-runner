@@ -1,0 +1,14 @@
+<svg width="153.72" height="24" viewBox="0 0 1281 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="input: 13/13 (100%)">
+  <title>input: 13/13 (100%)</title>
+  <g>
+    <rect fill="#555" width="382" height="200"/>
+    <rect fill="#3C1" x="382" width="899" height="200"/>
+  </g>
+  <g aria-hidden="true" fill="#fff" text-anchor="start" font-family="Verdana,DejaVu Sans,sans-serif" font-size="110">
+    <text x="60" y="148" textLength="282" fill="#000" opacity="0.1">input</text>
+    <text x="50" y="138" textLength="282">input</text>
+    <text x="437" y="148" textLength="799" fill="#000" opacity="0.1">13/13 (100%)</text>
+    <text x="427" y="138" textLength="799">13/13 (100%)</text>
+  </g>
+  
+</svg>

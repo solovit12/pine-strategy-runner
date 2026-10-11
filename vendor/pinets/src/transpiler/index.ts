@@ -52,9 +52,16 @@ import ScopeManager from './analysis/ScopeManager';
 import { injectImplicitImports } from './transformers/InjectionTransformer';
 import { normalizeNativeImports } from './transformers/NormalizationTransformer';
 import { wrapInContextFunction } from './transformers/WrapperTransformer';
-import { transformNestedArrowFunctions, preProcessContextBoundVars, preProcessUdtRegistry, runAnalysisPass } from './analysis/AnalysisPass';
+import { transformNestedArrowFunctions, renameParamsShadowingFunctions, preProcessContextBoundVars, preProcessUdtRegistry, runAnalysisPass } from './analysis/AnalysisPass';
 import { runTypeInferencePass } from './analysis/TypeInferencePass';
-import { runTransformationPass, transformEqualityChecks, propagateAsyncAwait } from './transformers/MainTransformer';
+import { markLazyOperands } from './analysis/LazyOperandPass';
+import {
+    runTransformationPass,
+    transformEqualityChecks,
+    transformStrictLogicalOperators,
+    transformDisplayArithmetic,
+    propagateAsyncAwait,
+} from './transformers/MainTransformer';
 import { extractPineScriptVersion, pineToJS } from './pineToJS/pineToJS.index';
 import { buildLtfSlices } from './slicing/buildLtfSlices';
 
@@ -112,6 +119,9 @@ export function transpile(source: string | Function, options: { debug: boolean; 
     // Pre-process: Transform all nested arrow functions
     transformNestedArrowFunctions(ast);
 
+    // Pre-process: a parameter named like a user function must not shadow the function
+    renameParamsShadowingFunctions(ast);
+
     // Pre-process: Normalize native imports (prevent renaming of standard symbols)
     normalizeNativeImports(ast);
 
@@ -143,15 +153,32 @@ export function transpile(source: string | Function, options: { debug: boolean; 
     // (see TradingView's v6 migration guide, "Fractional division of constants"),
     // and PineTS-syntax / function input (pineVersion === null) is JavaScript,
     // where `/` is always float division.
-    if (pineVersion !== null && pineVersion < 6) {
-        runTypeInferencePass(ast, scopeManager);
+    // The same pass types array.from() elements (int vs float) for every Pine version.
+    if (pineVersion !== null) {
+        runTypeInferencePass(ast, scopeManager, { intDivision: pineVersion < 6 });
     }
+
+    // Lazy operands: tag nodes inside `?:` branches (every version) and the
+    // right operand of `and`/`or` (Pine v6+, and JS `&&`/`||` for PineTS
+    // syntax) so the call transformer keeps their namespace calls inline
+    // instead of hoisting them into unconditional temps. Pine v5 evaluates
+    // `and`/`or` strictly (see TradingView's v6 migration guide, "Lazy
+    // evaluation of conditions"), so v5 keeps the eager right operand.
+    markLazyOperands(ast, { lazyLogical: pineVersion === null || pineVersion >= 6 });
 
     // Second pass: transform the code
     runTransformationPass(ast, scopeManager, originalParamName, options, sourceLines);
 
     // Post-process: transform equality checks to math.__eq calls
     transformEqualityChecks(ast);
+
+    // Post-process: Pine v5 `and`/`or` inside a lazy `?:` branch → math.__and/__or
+    // so both operands are evaluated (v5 strictness) without hoisting them out
+    // of the branch.
+    transformStrictLogicalOperators(ast);
+
+    // Post-process: `+` / `-` between display constants → display.__union / display.__minus
+    transformDisplayArithmetic(ast);
 
     // Post-process: propagate async/await through user-defined function call chains
     // Functions containing await (e.g., from request.security) must be async,
@@ -217,7 +244,9 @@ export function transpile(source: string | Function, options: { debug: boolean; 
 
     const _wraperFunction = new Function('', `var _r = ${transformedCode}\n; return _r;`);
     const mainFn = _wraperFunction(this);
+    (mainFn as any)._pineVersion = pineVersion;
     if (slices && Object.keys(slices).length > 0) {
+        for (const slice of Object.values(slices)) (slice as any)._pineVersion = pineVersion;
         (mainFn as any)._ltfSlices = slices;
     }
     return mainFn;

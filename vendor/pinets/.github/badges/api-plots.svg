@@ -1,0 +1,14 @@
+<svg width="135" height="24" viewBox="0 0 1125 200" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="plots: 8/8 (100%)">
+  <title>plots: 8/8 (100%)</title>
+  <g>
+    <rect fill="#555" width="366" height="200"/>
+    <rect fill="#3C1" x="366" width="759" height="200"/>
+  </g>
+  <g aria-hidden="true" fill="#fff" text-anchor="start" font-family="Verdana,DejaVu Sans,sans-serif" font-size="110">
+    <text x="60" y="148" textLength="266" fill="#000" opacity="0.1">plots</text>
+    <text x="50" y="138" textLength="266">plots</text>
+    <text x="421" y="148" textLength="659" fill="#000" opacity="0.1">8/8 (100%)</text>
+    <text x="411" y="138" textLength="659">8/8 (100%)</text>
+  </g>
+  
+</svg>

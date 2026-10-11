@@ -236,17 +236,26 @@ if bar_index == 0
 `, [first.parent, second.parent], [...first.source, ...second.source], 'HIGH_UNSUPPORTED_ORDER_FEATURE');
   });
 
-  it('rejects final-bar immediately=true instead of silently leaving the position open', async () => {
+  it('fills strategy.close(immediately=true) at the bar close, as TradingView does, under minute replay', async () => {
+    // PineTS 0.11 executes immediate closes at the close of the bar that placed them,
+    // so minute replay no longer needs to reject them.
     const first = flatHour(FIXTURE_A_START, 100);
     const second = flatHour(FIXTURE_A_START + HOUR_MS, 120);
-    await expectHighRunFailure(`
+    const detailization = buildHighDetailizationData([first.parent, second.parent], [...first.source, ...second.source], { tickSize: 0.01 });
+    const pine = new PineTS([first.parent, second.parent] as never, 'BINANCE:BTCUSDT', '60');
+    const evidence = attachHighBrokerReplay(pine, detailization);
+    const context = await pine.run(`
 //@version=6
 strategy("H4 immediate close", overlay=false)
 if bar_index == 0
     strategy.entry("L", strategy.long)
 if bar_index == 1
     strategy.close("L", immediately=true)
-`, [first.parent, second.parent], [...first.source, ...second.source], 'HIGH_UNSUPPORTED_ORDER_FEATURE');
+`) as unknown as { strategy: { closedtrades: Array<{ exit_price?: number; exit_bar_index?: number }>; opentrades: unknown[] } };
+    evidence.assertFinalPendingOrdersSupported();
+    expect(context.strategy.opentrades).toHaveLength(0);
+    expect(context.strategy.closedtrades).toHaveLength(1);
+    expect(context.strategy.closedtrades[0]).toMatchObject({ exit_price: 120, exit_bar_index: 1 });
   });
 
   it('F08 stops when an intrabar price would require a margin call', async () => {

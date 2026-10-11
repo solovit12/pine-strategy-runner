@@ -76,7 +76,7 @@ if time >= END_TIME and strategy.position_size != 0
       entryTime: '2026-08-22T00:01:00.000Z',
       exitTime: '2026-08-23T00:01:00.000Z',
       entrySignal: 'Long',
-      exitSignal: 'close_all',
+      exitSignal: 'Close position order', // TradingView's name for strategy.close_all
     });
   });
 });

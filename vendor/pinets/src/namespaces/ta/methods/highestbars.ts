@@ -10,6 +10,12 @@ import { Series } from '../../../Series';
  */
 export function highestbars(context: any) {
     return (source: any, _length: any, _callId?: string) => {
+        // ta.highestbars(length): the call id lands in the length slot
+        if (typeof _length === 'string' && _callId === undefined) {
+            _callId = _length;
+            _length = source;
+            source = context.data.high;
+        }
         const length = Series.from(_length).get(0);
         const series = Series.from(source);
 
@@ -26,14 +32,19 @@ export function highestbars(context: any) {
         for (let i = 0; i < length; i++) {
             const val = series.get(i);
 
-            if (isNaN(val)) continue;
+            // TradingView resets the window at na: only the bars since the most recent
+            // na take part, and an na on the current bar yields offset 0
+            // (tests/namespaces/ta/na-window-semantics.test.ts).
+            if (val === undefined || isNaN(val)) break;
 
-            if (isNaN(maxOffset) || val > maxVal) {
+            // `>=` so that, scanning newest → oldest, an older bar with the same value
+            // overwrites: TradingView returns the offset of the OLDEST bar among ties.
+            if (isNaN(maxOffset) || val >= maxVal) {
                 maxVal = val;
                 maxOffset = -i;
             }
         }
 
-        return maxOffset;
+        return isNaN(maxOffset) ? 0 : maxOffset;
     };
 }

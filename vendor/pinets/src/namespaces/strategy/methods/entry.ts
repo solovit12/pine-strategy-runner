@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 // Copyright (C) 2026 LuxAlgo
 
-import { calculateOrderQty, parseDirection, wouldExceedPyramiding, roundToMintick } from '../utils';
+import { calculateOrderQty, parseDirection, wouldExceedPyramiding, roundToMintick, sizingPrice } from '../utils';
 import { Order } from '../types';
 import { Series } from '../../../Series';
 import { parseArgsForPineParams } from '../../utils';
@@ -51,11 +51,14 @@ export function entry(context: any) {
             return val;
         };
 
+        // An na price leg is absent (`limit = na` places a market order); `qty = na` uses the default.
+        const isNaValue = (v: any) => (typeof v === 'number' && Number.isNaN(v)) || (typeof v === 'object' && v !== null && '__value' in v);
+        const priceLeg = (v: any) => (isNaValue(v) ? undefined : v);
         const idValue       = extractValue(parsed.id);
         const directionVal  = extractValue(parsed.direction);
-        const qtyValue      = extractValue(parsed.qty);
-        const limitValue    = extractValue(parsed.limit);
-        const stopValue     = extractValue(parsed.stop);
+        const qtyValue      = priceLeg(extractValue(parsed.qty));
+        const limitValue    = priceLeg(extractValue(parsed.limit));
+        const stopValue     = priceLeg(extractValue(parsed.stop));
         const ocaName       = extractValue(parsed.oca_name);
         const ocaType       = extractValue(parsed.oca_type);
         const commentValue  = extractValue(parsed.comment);
@@ -76,7 +79,7 @@ export function entry(context: any) {
         // even for a reversal order since its qty already bakes in the close-qty.
         let currentSize = strategy.position_size;
         for (const o of strategy.pending_orders) {
-            if (o.id !== idValue && o.bar === context.idx && o.category === 'entry' && o.type === 'market') {
+            if (o.bar === context.idx && o.category === 'entry' && o.type === 'market') {
                 currentSize += parseDirection(o.direction) * o.qty;
             }
         }
@@ -93,10 +96,6 @@ export function entry(context: any) {
         // requested qty so that one market order both flattens the prior
         // position AND opens the new direction with the requested size.
         const currentPrice = Series.from(context.data.close).get(0);
-        const baseQty = calculateOrderQty(context, qtyValue, dir, currentPrice);
-
-        const isReversal = currentSize !== 0 && Math.sign(currentSize) !== dir;
-        const totalQty = isReversal ? Math.abs(currentSize) + baseQty : baseQty;
 
         // Determine order type from limit/stop presence
         let orderType: 'market' | 'limit' | 'stop' | 'stop-limit' = 'market';
@@ -114,6 +113,13 @@ export function entry(context: any) {
         const mintick = context.pine?.syminfo?.mintick ?? 0;
         const limitValueRounded = limitValue !== undefined ? roundToMintick(limitValue, currentPrice, mintick) : undefined;
         const stopValueRounded  = stopValue  !== undefined ? roundToMintick(stopValue,  currentPrice, mintick) : undefined;
+
+        const baseQty = calculateOrderQty(context, qtyValue, dir, sizingPrice(stopValueRounded, limitValueRounded, currentPrice));
+
+        const isReversal = currentSize !== 0 && Math.sign(currentSize) !== dir;
+        // An order smaller than the symbol's minimum quantity is rejected.
+        if (baseQty <= 0 && !isReversal) return;
+        const totalQty = isReversal ? Math.abs(currentSize) + baseQty : baseQty;
 
         const currentTime = Series.from(context.data.openTime).get(0);
 
@@ -143,13 +149,10 @@ export function entry(context: any) {
             _replay_specified_qty: qtyValue,
         } as any;
 
-        // Pine modifies a still-pending entry when strategy.entry() is called
-        // again with the same ID. Keep only the newest definition so an old
-        // stop/limit cannot fill after the script has moved that order.
+        // An entry with the id of an entry order still pending from an earlier bar modifies that
+        // order: a limit entry re-placed every day replaces yesterday's instead of piling up.
         strategy.pending_orders = strategy.pending_orders.filter(
-            (order: Order) => order.status !== 'pending'
-                || (order.category ?? 'entry') !== 'entry'
-                || order.id !== idValue,
+            (o: Order) => !(o.category === 'entry' && o.id === idValue && o.status === 'pending' && o.bar < context.idx),
         );
         strategy.pending_orders.push(orderObj);
     };

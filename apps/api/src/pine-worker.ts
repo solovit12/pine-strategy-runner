@@ -46,7 +46,7 @@ process.on('message', async (message: WorkerRequest) => {
     else if (defaults.marginLongPercent !== undefined) strategy.prop.margin_long = defaults.marginLongPercent;
     if (message.execution.marginShortPercent !== undefined) strategy.prop.margin_short = message.execution.marginShortPercent;
     else if (defaults.marginShortPercent !== undefined) strategy.prop.margin_short = defaults.marginShortPercent;
-    // PineTS 0.9.33 exposes these properties but does not implement their
+    // PineTS exposes these properties but does not implement their
     // execution loops yet. Force the supported model so the report is honest.
     strategy.prop.calc_on_order_fills = false;
     strategy.prop.calc_on_every_tick = false;

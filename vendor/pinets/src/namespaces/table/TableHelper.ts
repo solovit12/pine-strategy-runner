@@ -17,7 +17,7 @@ const TABLE_NEW_PARAMS = [
 //prettier-ignore
 const TABLE_CELL_PARAMS = [
     'column', 'row', 'text', 'width', 'height', 'text_color', 'text_halign',
-    'text_valign', 'text_size', 'bgcolor', 'tooltip', 'text_font_family',
+    'text_valign', 'text_size', 'bgcolor', 'tooltip', 'text_font_family', 'text_formatting',
 ];
 const TABLE_RANGE_PARAMS = ['start_column', 'start_row', 'end_column', 'end_row'];
 
@@ -135,8 +135,18 @@ export class TableHelper {
             this._resolve(force_overlay) ?? false,
         );
         tbl._setHelper(this);
+        this._takePosition(tbl);
         this._tables.push(tbl);
         return tbl;
+    }
+
+    // TradingView shows one table per position: the newest one (or the one last moved there).
+    // The table it replaces is gone, which also keeps the table list bounded when a script
+    // creates a table on every bar.
+    private _takePosition(tbl: TableObject): void {
+        for (const other of this._tables) {
+            if (other !== tbl && !other._deleted && other.position === tbl.position) other._deleted = true;
+        }
     }
 
     // Pine `table(arg)` is a type cast / typed-na, NOT a constructor.
@@ -169,6 +179,7 @@ export class TableHelper {
         let bgcolor: any = '';
         let tooltip: any = '';
         let text_font_family: any = 'default';
+        let text_formatting: any = 'none';
 
         // Detect trailing options object from transpiler's named-args pattern
         // e.g. table.cell(t1, 0, 0, {text: "X", text_color: "#fff", ...})
@@ -193,6 +204,7 @@ export class TableHelper {
             bgcolor = posArgs[10] ?? opts.bgcolor ?? bgcolor;
             tooltip = posArgs[11] ?? opts.tooltip ?? tooltip;
             text_font_family = posArgs[12] ?? opts.text_font_family ?? text_font_family;
+            text_formatting = posArgs[13] ?? opts.text_formatting ?? text_formatting;
         } else {
             table_id = args[0];
             column = args[1] ?? 0;
@@ -207,6 +219,7 @@ export class TableHelper {
             bgcolor = args[10] ?? bgcolor;
             tooltip = args[11] ?? tooltip;
             text_font_family = args[12] ?? text_font_family;
+            text_formatting = args[13] ?? text_formatting;
         }
 
         const tbl = this._resolve(table_id) as TableObject;
@@ -226,6 +239,7 @@ export class TableHelper {
             bgcolor: this._resolve(bgcolor) || '',
             tooltip: this._resolveText(this._resolve(tooltip)),
             text_font_family: this._resolve(text_font_family) || 'default',
+            text_formatting: this._resolve(text_formatting) || 'none',
         });
     }
 
@@ -318,14 +332,12 @@ export class TableHelper {
         // na coordinates: silent no-op (matches the cell-access behavior).
         if (isNaN(sc) || isNaN(sr) || isNaN(ec) || isNaN(er)) return;
 
-        // Mark all cells in the region as merged, pointing to the start cell
+        // Mark all cells in the region as merged, pointing to the start cell. Written to the
+        // cells themselves: a cell already merged by an overlapping region is re-pointed.
         for (let r = sr; r <= er; r++) {
             for (let c = sc; c <= ec; c++) {
                 if (r === sr && c === sc) continue; // Skip the origin cell
-                tbl.setCell(c, r, {
-                    _merged: true,
-                    _merge_parent: [sc, sr],
-                });
+                tbl.markMerged(c, r, sc, sr);
             }
         }
 
@@ -384,6 +396,11 @@ export class TableHelper {
         this._setCellProp(table_id, column, row, 'text_font_family', text_font_family);
     }
 
+    @silentInSecondary
+    cell_set_text_formatting(table_id: any, column: any, row: any, text_formatting: any): void {
+        this._setCellProp(table_id, column, row, 'text_formatting', text_formatting);
+    }
+
     // ── Table setter methods ───────────────────────────────────
 
     @silentInSecondary
@@ -391,6 +408,7 @@ export class TableHelper {
         const tbl = this._resolve(table_id) as TableObject;
         if (!tbl || tbl._deleted) return;
         tbl.position = this._resolve(position) || tbl.position;
+        this._takePosition(tbl);
     }
 
     @silentInSecondary

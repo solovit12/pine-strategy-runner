@@ -20,6 +20,7 @@ import { BinanceFuturesHistoricalProvider } from '../../../packages/market-data/
 import { assertHighRunConfiguration, HighSafetyError } from '../../../packages/pine-runtime/src/high-safety.js';
 import {
   PINE_TIMEFRAME,
+  PINETS_VERSION,
   type BacktestResponse,
   type BacktestTimeframe,
   BacktestRequestSchema,
@@ -316,7 +317,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
       role,
       mode: configured ? 'backtest-and-paper' : 'backtest-only',
       paper: { configured, acceptingNewRun: capabilities.available },
-      runtime: 'PineTS 0.9.33',
+      runtime: `PineTS ${PINETS_VERSION}`,
       historicalData: {
         provider: 'Binance Futures',
         venue: 'binance',
@@ -827,7 +828,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
 
     const response: BacktestResponse = {
       runId: randomUUID(),
-      runtime: { name: 'PineTS', version: '0.9.33', isolatedProcess: true },
+      runtime: { name: 'PineTS', version: PINETS_VERSION, isolatedProcess: true },
       data: {
         provider: parentResult.provenance.provider,
         venue: parentResult.provenance.venue,

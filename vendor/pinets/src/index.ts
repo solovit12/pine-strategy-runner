@@ -14,12 +14,13 @@ export { FMPProvider } from './marketData/FMP/FMPProvider.class';
 export { AlpacaProvider } from './marketData/Alpaca/AlpacaProvider.class';
 
 // Provider types
-export type { IProvider, ISymbolInfo, BaseProviderConfig, ApiKeyProviderConfig } from './marketData/IProvider';
-export type { Kline, PeriodType } from './marketData/types';
+export type { IProvider, IFootprintProvider, ISymbolInfo, BaseProviderConfig, ApiKeyProviderConfig } from './marketData/IProvider';
+export { hasFootprintData } from './marketData/IProvider';
+export type { Kline, FootprintBar, FootprintLevel, PeriodType } from './marketData/types';
 export { computeNextPeriodStart, localTimeToUTC, computeSessionClose, TIMEFRAME_SECONDS, TIMEFRAME_PERIOD_INFO } from './marketData/types';
 export { aggregateCandles, selectSubTimeframe, getAggregationRatio } from './marketData/aggregation';
 
-export { splitTickerModifier, stripTickerModifier, withTickerModifier } from './tickerModifier';
+export { splitTickerModifier, stripTickerModifier, withTickerModifier, decodeTickerId, encodeTickerId } from './tickerModifier';
 
 export { PineTS, Context, Provider, Indicator, PineRuntimeError };
 export type { StrategyBrokerTick, StrategyBrokerTickAudit, StrategyBrokerPendingOrder, StrategyBrokerReplayController, StrategyBrokerReplayHook } from './PineTS.class';

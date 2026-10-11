@@ -1,7 +1,7 @@
 import Editor from '@monaco-editor/react';
 import { AlertTriangle, Play, Settings2, ShieldCheck, Square } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import type { BacktestRequest, BacktestResponse, BacktestTimeframe, PresetResponse } from '../../../packages/shared/src/contracts';
+import { PINETS_VERSION, type BacktestRequest, type BacktestResponse, type BacktestTimeframe, type PresetResponse } from '../../../packages/shared/src/contracts';
 import { PYTHON_STRATEGY_SOURCE_PREFIX, pythonStrategyRef, type PaperStrategySettings, type StrategyDetail, type StrategySummary } from '../../../packages/shared/src/strategy-catalog-contracts';
 import { BinanceMarketSelector } from './components/BinanceMarketSelector';
 import { Metrics } from './components/Metrics';
@@ -800,7 +800,7 @@ export function App() {
       <TradesTable trades={result?.trades || []} />
 
       <footer className="evidence-footer">
-        <div><ShieldCheck size={15} /><span>Runtime <InfoTooltip label="runtime" en={runtimeCopy.en} ru={runtimeCopy.ru} /></span><strong>{result ? runtimeCopy.en : 'PineTS 0.9.33'}</strong></div>
+        <div><ShieldCheck size={15} /><span>Runtime <InfoTooltip label="runtime" en={runtimeCopy.en} ru={runtimeCopy.ru} /></span><strong>{result ? runtimeCopy.en : `PineTS ${PINETS_VERSION}`}</strong></div>
         <p>Binance Futures data <InfoTooltip label="backtest limitations" alignRight en="Backtests use Binance Futures candles and the commission you enter. Prices and execution may differ on Hyperliquid and Lighter. Funding is not included in PnL, so live results may differ." ru="Бэктест использует свечи Binance Futures и введённую вами комиссию. На Hyperliquid и Lighter цены и исполнение могут отличаться. Фандинг не учитывается в PnL, поэтому реальный результат может быть другим." /></p>
       </footer>
       </div>

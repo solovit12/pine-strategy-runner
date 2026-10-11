@@ -1,10 +1,13 @@
 # Controlled PineTS source fork
 
 - Upstream: `https://github.com/LuxAlgo/PineTS`
-- Upstream version: `0.9.33`
-- Upstream commit: `493a410270b83f94d7504b2eb979deb777e8ced7`
+- Upstream version: `0.11.0` (tag `v0.11.0`)
+- Upstream commit: `c5e6b0efee7e42d78b42d96f14173f38be082551`
 - License: `AGPL-3.0-only` (see `LICENSE`)
-- Local fork version: `0.9.33-pine-strategy-runner.h4.1`
+- Local fork version: `0.11.0-pine-strategy-runner.1`
+- Previous base: `0.9.33` (`493a410`); upgraded 2026-10-11. Upstream's own pending-entry
+  replacement rule (0.11.0) replaced our earlier variant; upstream docs and tests are
+  not vendored (only the fork's tests below).
 
 This directory is the auditable source fork used by Pine Strategy Runner. It
 adds an opt-in broker-replay hook and directed High replay execution while
@@ -24,15 +27,13 @@ High replay:
 - reports required margin and whether each replay point would require a
   margin call, without performing an unqualified High liquidation.
 
-The checked-in `dist/pinets.min.*` and `dist/types` files were built from the
-checked-in source with `npm run build:prod:all`. The fork's focused tests are
+`dist/` is not checked in: `scripts/ensure-pinets-build.mjs` builds it from this
+source with `npm run build:prod:all` when the source changes. The fork's focused tests are
 under `tests/namespaces/strategy/`.
 
-The install-facing `package.json` intentionally omits fork build-only
-dependencies so npm does not merge PineTS's Vitest 4 peer graph into the root
-application's Vitest 5 graph. For an isolated rebuild, copy this directory to
-a temporary location, replace its `package.json` with `package-build.json`, run
-`npm ci`, then run the focused tests and `npm run build:prod:all` there.
+To run the full upstream suite with the fork, check out the upstream tag, apply
+the fork's source changes and run `npm ci && npm test` there (2026-10-11: 2765
+passed, including the fork's tests).
 
 Gate H4 rejects stop-limit, trailing and partial-exit orders before replay and
 stops when a replay point would require a margin call. The public app continues

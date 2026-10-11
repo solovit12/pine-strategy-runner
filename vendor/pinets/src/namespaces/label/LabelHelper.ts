@@ -4,15 +4,16 @@ import { Series } from '../../Series';
 import { parseArgsForPineParams } from '../utils';
 import { LabelObject } from './LabelObject';
 import { ChartPointObject } from '../chart/ChartPointObject';
+import { resolvePoint } from '../chart/resolvePoint';
 import { NAHelper } from '../Core';
 import { silentInSecondary } from '../silentInSecondary';
 
 //prettier-ignore
 const LABEL_NEW_SIGNATURES = [
     ['x', 'y', 'text', 'xloc', 'yloc', 'color', 'style', 'textcolor',
-     'size', 'textalign', 'tooltip', 'text_font_family', 'force_overlay'],
+     'size', 'textalign', 'tooltip', 'text_font_family', 'force_overlay', 'text_formatting'],
     ['point', 'text', 'xloc', 'yloc', 'color', 'style', 'textcolor',
-     'size', 'textalign', 'tooltip', 'text_font_family', 'force_overlay'],
+     'size', 'textalign', 'tooltip', 'text_font_family', 'force_overlay', 'text_formatting'],
 ];
 
 //prettier-ignore
@@ -20,7 +21,7 @@ const LABEL_NEW_ARGS_TYPES = {
     x: 'number', y: 'number', text: 'string', xloc: 'string', yloc: 'string',
     color: 'color', style: 'string', textcolor: 'color', size: 'string',
     textalign: 'string', tooltip: 'string', text_font_family: 'string',
-    force_overlay: 'boolean', point: 'point',
+    force_overlay: 'boolean', point: 'point', text_formatting: 'string',
 };
 
 export class LabelHelper {
@@ -112,6 +113,7 @@ export class LabelHelper {
         tooltip: string = '',
         text_font_family: string = 'default',
         force_overlay: boolean = false,
+        text_formatting: string = 'none',
     ): LabelObject {
         // Resolve any Series/function values to scalars for label properties
         const lbl = new LabelObject(
@@ -127,6 +129,7 @@ export class LabelHelper {
             this._resolve(tooltip),
             this._resolve(text_font_family),
             force_overlay,
+            this._resolve(text_formatting) || 'none',
         );
         lbl._helper = this;
         lbl._createdAtBar = this.context.idx;
@@ -153,8 +156,8 @@ export class LabelHelper {
 
     // label.new() — explicit Pine Script factory method
     // Supports two signatures:
-    //   label.new(x, y, text, xloc, yloc, color, style, textcolor, size, textalign, tooltip, text_font_family, force_overlay)
-    //   label.new(point, text, xloc, yloc, color, style, textcolor, size, textalign, tooltip, text_font_family, force_overlay)
+    //   label.new(x, y, text, xloc, yloc, color, style, textcolor, size, textalign, tooltip, text_font_family, force_overlay, text_formatting)
+    //   label.new(point, text, xloc, yloc, color, style, textcolor, size, textalign, tooltip, text_font_family, force_overlay, text_formatting)
     @silentInSecondary
     new(...args: any[]): LabelObject {
         const parsed = parseArgsForPineParams<any>(args, LABEL_NEW_SIGNATURES, LABEL_NEW_ARGS_TYPES);
@@ -165,21 +168,9 @@ export class LabelHelper {
 
         if (parsed.point instanceof ChartPointObject) {
             const pt = parsed.point as ChartPointObject;
-            // Treat NaN as "not provided" — see set_point() comment for context.
-            const hasIndex = pt.index !== undefined &&
-                !(typeof pt.index === 'number' && isNaN(pt.index));
-            const hasTime = pt.time !== undefined &&
-                !(typeof pt.time === 'number' && isNaN(pt.time));
-            if (hasIndex) {
-                x = pt.index!;
-                xloc = xloc || 'bi';
-            } else if (hasTime) {
-                x = pt.time!;
-                xloc = xloc || 'bt';
-            } else {
-                x = 0;
-                xloc = xloc || 'bi';
-            }
+            const r = resolvePoint(pt, xloc);
+            x = r.x;
+            xloc = xloc || r.xloc;
             y = pt.price;
         } else {
             // Resolve Series/function coordinate args to scalars at creation —
@@ -193,6 +184,7 @@ export class LabelHelper {
             x, y, parsed.text, xloc, parsed.yloc,
             parsed.color, parsed.style, parsed.textcolor, parsed.size,
             parsed.textalign, parsed.tooltip, parsed.text_font_family, parsed.force_overlay,
+            parsed.text_formatting,
         );
     }
 
@@ -271,8 +263,21 @@ export class LabelHelper {
     }
 
     @silentInSecondary
-    set_xloc(id: LabelObject, xloc: string): void {
-        if (id && !id._deleted) id.xloc = xloc;
+    set_text_font_family(id: LabelObject, family: string): void {
+        if (id && !id._deleted) id.text_font_family = this._resolve(family);
+    }
+
+    @silentInSecondary
+    set_text_formatting(id: LabelObject, formatting: string): void {
+        if (id && !id._deleted) id.text_formatting = this._resolve(formatting);
+    }
+
+    @silentInSecondary
+    set_xloc(id: LabelObject, x: number, xloc: string): void {
+        if (id && !id._deleted) {
+            id.x = this._resolve(x);
+            id.xloc = this._resolve(xloc);
+        }
     }
 
     @silentInSecondary
@@ -282,40 +287,25 @@ export class LabelHelper {
 
     @silentInSecondary
     set_point(id: LabelObject, point: ChartPointObject): void {
+        // The point sets the coordinate the label's xloc reads (its time for xloc.bar_time).
         if (id && !id._deleted && point) {
-            // Treat NaN as "not provided" so `chart.point.new(time, na, price)`
-            // and `chart.point.new(na, bar_index, price)` (idiomatic in TV-
-            // published indicators, e.g. SMC's drawHighLowSwings) correctly
-            // resolve to whichever coord is actually set. Without the NaN
-            // check, `point.index !== undefined` is true for NaN and the
-            // label silently lands at x=NaN, hiding it from the chart.
-            const hasIndex = point.index !== undefined &&
-                !(typeof point.index === 'number' && isNaN(point.index));
-            const hasTime = point.time !== undefined &&
-                !(typeof point.time === 'number' && isNaN(point.time));
-            if (hasIndex) {
-                id.x = point.index!;
-                id.xloc = 'bi';
-            } else if (hasTime) {
-                id.x = point.time!;
-                id.xloc = 'bt';
-            }
+            id.x = resolvePoint(point, id.xloc).x;
             id.y = point.price;
         }
     }
 
-    // --- Getter methods ---
+    // --- Getter methods (na, and "" for the text, for an na or deleted label) ---
 
     get_x(id: LabelObject): number {
-        return id ? id.x : NaN;
+        return id && !id._deleted ? id.x : NaN;
     }
 
     get_y(id: LabelObject): number {
-        return id ? id.y : NaN;
+        return id && !id._deleted ? id.y : NaN;
     }
 
     get_text(id: LabelObject): string {
-        return id ? id.text : '';
+        return id && !id._deleted ? id.text : '';
     }
 
     // --- Management methods ---
@@ -323,7 +313,7 @@ export class LabelHelper {
     @silentInSecondary
     copy(id: LabelObject): LabelObject | undefined {
         if (!id) return undefined;
-        const lbl = id.copy();
+        const lbl = id._clone();
         lbl._helper = this;
         lbl._createdAtBar = this.context.idx;
         this._labels.push(lbl);

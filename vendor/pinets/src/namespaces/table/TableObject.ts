@@ -28,6 +28,7 @@ export interface TableCell {
     bgcolor: string;
     tooltip: string;
     text_font_family: string;
+    text_formatting: string;
     _merged: boolean;
     _merge_parent: [number, number] | null; // [col, row] of the merge origin
 }
@@ -120,22 +121,34 @@ export class TableObject {
         row = truncCoord(row);
         if (!(row >= 0 && row < this.rows && column >= 0 && column < this.columns)) return;
 
-        const existing = this.cells[row][column];
-        if (existing && existing._merged && existing._merge_parent) {
-            // Redirect to merge parent (guard against self-reference to prevent infinite recursion)
+        // A merged cell writes to its merge origin. Overlapping merges can chain origins
+        // (and loop): follow the chain, stopping at a cell already visited.
+        const visited = new Set<number>();
+        for (;;) {
+            const existing = this.cells[row][column];
+            if (!existing?._merged || !existing._merge_parent) break;
+            visited.add(row * this.columns + column);
             const [pc, pr] = existing._merge_parent;
-            if (pc === column && pr === row) {
-                // Self-referencing merge parent — clear the flag and write directly
+            if (!(pr >= 0 && pr < this.rows && pc >= 0 && pc < this.columns) || visited.has(pr * this.columns + pc)) {
                 existing._merged = false;
-                existing._merge_parent = undefined;
-            } else {
-                this.setCell(pc, pr, props);
-                return;
+                existing._merge_parent = null;
+                break;
             }
+            column = pc;
+            row = pr;
         }
 
-        const cell = existing || this._defaultCell();
+        const cell = this.cells[row][column] || this._defaultCell();
         Object.assign(cell, props);
+        this.cells[row][column] = cell;
+    }
+
+    /** Marks a cell as part of the merge region whose origin is (originCol, originRow). */
+    markMerged(column: number, row: number, originCol: number, originRow: number): void {
+        if (!(row >= 0 && row < this.rows && column >= 0 && column < this.columns)) return;
+        const cell = this.cells[row][column] || this._defaultCell();
+        cell._merged = true;
+        cell._merge_parent = [originCol, originRow];
         this.cells[row][column] = cell;
     }
 
@@ -174,6 +187,7 @@ export class TableObject {
     cell_set_text_halign(...args: any[]) { return this._helper.cell_set_text_halign(this, ...args); }
     cell_set_text_valign(...args: any[]) { return this._helper.cell_set_text_valign(this, ...args); }
     cell_set_text_font_family(...args: any[]) { return this._helper.cell_set_text_font_family(this, ...args); }
+    cell_set_text_formatting(...args: any[]) { return this._helper.cell_set_text_formatting(this, ...args); }
 
     set_position(...args: any[]) { return this._helper.set_position(this, ...args); }
     set_bgcolor(...args: any[]) { return this._helper.set_bgcolor(this, ...args); }
@@ -194,6 +208,7 @@ export class TableObject {
             bgcolor: '',
             tooltip: '',
             text_font_family: 'default',
+            text_formatting: 'none',
             _merged: false,
             _merge_parent: null,
         };

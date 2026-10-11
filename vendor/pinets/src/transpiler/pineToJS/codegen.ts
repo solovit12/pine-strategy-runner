@@ -11,6 +11,10 @@ import { CONTEXT_PINE_VARS, NAMESPACE_COLLISION_NAMES, JS_RESERVED_WORDS } from 
 // transpiler incorrectly treating them as namespace references (e.g., color.__value()).
 const CONFLICTING_NAMES = new Set(CONTEXT_PINE_VARS);
 
+// `string`, `series string`, `simple string`, ...
+const isStringType = (varType: any) => typeof varType === 'string' && /(^|\s)string$/.test(varType);
+const isNaIdentifier = (node: any) => node?.type === 'Identifier' && node.name === 'na';
+
 export class CodeGenerator {
     private indent: number;
     private indentStr: string;
@@ -23,6 +27,23 @@ export class CodeGenerator {
     // Maps user-defined function names to their ordered parameter names.
     // Used to resolve named arguments to correct positional slots.
     private functionParams: Map<string, string[]>;
+    // Collision names (NAMESPACE_COLLISION_NAMES) that the user declared as a
+    // FUNCTION. A bare call `name(...)` to one of these can only be the user
+    // function (a constants namespace is not callable), so its callees must
+    // follow the `_$N` rename — unlike variable collisions, where `fill(...)`
+    // still means the built-in.
+    private userFunctionCollisions: Set<string>;
+    // Renamed user FUNCTIONS (collision or reserved name) -> their JS name, for calls made
+    // where a same-named parameter hides the entry in the rename map.
+    private userFunctionRenames: Map<string, string>;
+    // UDT names that were renamed because they are JS reserved words
+    // (`type new`). Type annotation strings naming them are rewritten too.
+    private renamedTypeNames: Set<string>;
+    // Number of methods emitted so far per Pine name (overloads on different receiver types).
+    private methodNameCounts: Map<string, number> = new Map();
+    // Per function scope (script body first): whether a variable name is a string.
+    // `na` stored in a string variable is the na string, which is the empty string.
+    private stringVarScopes: Array<Map<string, boolean>> = [new Map()];
     constructor(options: { indentStr?: string; sourceCode?: string; includeSourceComments?: boolean } = {}) {
         this.indent = 0;
         this.indentStr = options.indentStr || '  ';
@@ -33,6 +54,38 @@ export class CodeGenerator {
         this.includeSourceComments = options.includeSourceComments || false; // default false
         this.paramRenameCounter = 0;
         this.functionParams = new Map();
+        this.userFunctionCollisions = new Set();
+        this.userFunctionRenames = new Map();
+        this.renamedTypeNames = new Set();
+    }
+
+    /**
+     * Pine Script treats `_` as a write-only discard identifier: it may be
+     * declared any number of times, in any scope, including several times in
+     * the same scope (`[_, s, _] = ...` followed by `[_, t, _] = ...`, or a
+     * plain `_ = expr` repeated). JavaScript forbids re-declaring a `let`/`var`
+     * binding in one scope, so every `_` declaration target is renamed to a
+     * fresh `_$N` placeholder. `$` is not a legal Pine identifier character,
+     * so the placeholders can never collide with user variables.
+     *
+     * Non-`_` duplicates inside one tuple (invalid Pine, but tolerated) fall
+     * back to a numeric suffix so the generated destructuring stays valid JS.
+     */
+    private renameDiscardTargets(elements: any[]) {
+        const seen = new Set<string>();
+        for (const el of elements) {
+            if (!el || el.type !== 'Identifier') continue;
+            if (el.name === '_') {
+                el.name = this.freshDiscardName();
+            } else if (seen.has(el.name)) {
+                el.name = `${el.name}${this.paramRenameCounter++}`;
+            }
+            seen.add(el.name);
+        }
+    }
+
+    private freshDiscardName(): string {
+        return `_$${this.paramRenameCounter++}`;
     }
 
     generate(ast) {
@@ -40,6 +93,8 @@ export class CodeGenerator {
         this.indent = 0;
         this.lastCommentedLine = -1;
         this.functionParams = new Map();
+        this.userFunctionCollisions = new Set();
+        this.userFunctionRenames = new Map();
 
         if (ast.type === 'Program') {
             // Pre-scan: collect user-defined function parameter lists and
@@ -53,11 +108,59 @@ export class CodeGenerator {
         return this.output.join('');
     }
 
-    // Pre-scan AST to collect function parameter lists for named-arg resolution
-    // and rename user variables that conflict with Pine namespace names.
+    // Rename user names that conflict with Pine namespaces or JS reserved
+    // words, then collect function parameter lists for named-arg resolution.
+    // Renaming runs first so the parameter map is keyed by the same (possibly
+    // renamed) function name that call-site callees carry after the pass.
     private preProcessAST(ast: any) {
-        this.collectFunctionParams(ast);
         this.renameConflictingVariables(ast);
+        this.renameFunctionsSharingTypeNames(ast);
+        this.collectFunctionParams(ast);
+    }
+
+    /**
+     * Pine keeps UDTs and functions in separate namespaces (`type level` next
+     * to `level(...) => line.new(...)`), but both become bindings in one JS
+     * scope. The function is renamed with the collision-proof `_$N` suffix:
+     * it is only ever referenced as a bare callee, while the type name also
+     * lives in annotation strings (`array<level>`, `level l`).
+     * Methods are skipped — their `$M_` prefix already avoids the clash.
+     */
+    private renameFunctionsSharingTypeNames(ast: any) {
+        const typeNames = new Set<string>();
+        for (const node of ast.body) {
+            if (node.type === 'TypeDefinition' && typeof node.name === 'string') typeNames.add(node.name);
+        }
+        if (typeNames.size === 0) return;
+
+        const renameMap = new Map<string, string>();
+        for (const node of ast.body) {
+            const name = node.type === 'FunctionDeclaration' && !node.id?.isMethod ? node.id?.name : undefined;
+            if (name && typeNames.has(name) && !renameMap.has(name)) {
+                renameMap.set(name, `${name}_$${this.paramRenameCounter++}`);
+            }
+        }
+        if (renameMap.size === 0) return;
+
+        const walk = (node: any) => {
+            if (!node || typeof node !== 'object') return;
+            if (node.type === 'FunctionDeclaration' && !node.id?.isMethod && renameMap.has(node.id?.name)) {
+                node.id.name = renameMap.get(node.id.name);
+            }
+            if (node.type === 'CallExpression' && node.callee?.type === 'Identifier' && renameMap.has(node.callee.name)) {
+                node.callee.name = renameMap.get(node.callee.name);
+            }
+            for (const key of Object.keys(node)) {
+                if (key === 'type') continue;
+                const val = node[key];
+                if (Array.isArray(val)) {
+                    for (const child of val) walk(child);
+                } else if (val && typeof val === 'object' && val.type) {
+                    walk(val);
+                }
+            }
+        };
+        walk(ast);
     }
 
     /**
@@ -70,7 +173,11 @@ export class CodeGenerator {
      *  1. Pine namespace collisions (NAMESPACE_COLLISION_NAMES — e.g. `fill`,
      *     `size`, `color`, `line`): user variable would shadow the namespace
      *     destructured from `$.pine`. The CALL SITE `fill(...)` is the
-     *     namespace, NOT the renamed variable, so callees are NOT renamed.
+     *     namespace, NOT the renamed variable, so callees are NOT renamed —
+     *     UNLESS the user declared a FUNCTION with that name
+     *     (`position(x) => close + x`, valid Pine): then a bare call
+     *     `position(14)` can only be the user function and its callees ARE
+     *     renamed (tracked in `userFunctionCollisions`).
      *
      *  2. JS reserved keyword collisions (JS_RESERVED_WORDS — e.g. `delete`,
      *     `super`, `static`): the generated JS would fail to parse
@@ -83,14 +190,25 @@ export class CodeGenerator {
      * Renaming rules (common):
      * - Variable declaration target (let fill = ...)  → renamed
      * - Function declaration name (function delete()) → renamed (class 2 only)
+     * - UDT type name (type new → const new = Type)   → renamed (class 2 only),
+     *   together with every type annotation naming it (`new n = ...`,
+     *   `array<new>`, field types, `__pineUdtVar` markers)
      * - Assignment target (fill := ...)               → renamed
      * - Bare identifier read (return fill)            → renamed
-     * - MemberExpression object (size.tiny)           → NOT renamed
+     * - MemberExpression object (size.tiny)           → NOT renamed (class 1:
+     *   a namespace access) / renamed (class 2: `new.new()`, `delete.x` can
+     *   only be the user's UDT or variable — no Pine namespace has that name)
      * - MemberExpression property (obj.delete)        → NOT renamed
      * - Object property key ({size: ...})             → NOT renamed
+     *
+     * Function parameters shadow a renamed global of the same name inside
+     * their function: the body is walked with that name removed from the map.
+     * Parameters themselves are renamed later, per function, in
+     * `generateFunctionDeclaration`.
      */
     private renameConflictingVariables(ast: any) {
         const renameMap = new Map<string, string>();
+        this.renamedTypeNames = new Set();
 
         // Collect conflicting variable names from the entire program
         this.collectConflictingVarNames(ast, renameMap);
@@ -99,6 +217,17 @@ export class CodeGenerator {
             // Apply context-aware renaming across the entire program body
             this.renameVariableRefsInAST(ast, renameMap);
         }
+    }
+
+    /**
+     * Rewrite a Pine type annotation string (`new`, `array<new>`, `new[]`,
+     * `series new`) so renamed UDT names are followed. Only names collected as
+     * renamed TYPES are substituted — a variable that shares its name with a
+     * built-in type never appears in an annotation.
+     */
+    private renameTypeString(typeStr: any, renameMap: Map<string, string>): any {
+        if (typeof typeStr !== 'string' || this.renamedTypeNames.size === 0) return typeStr;
+        return typeStr.replace(/[A-Za-z_]\w*/g, (m) => (this.renamedTypeNames.has(m) && renameMap.has(m) ? renameMap.get(m)! : m));
     }
 
     /**
@@ -148,12 +277,27 @@ export class CodeGenerator {
         // name visible at the call site (`obj.delete()` looks up `delete`,
         // not `delete_$0`), breaking UFCS retargeting in ExpressionTransformer.
         if (node.type === 'FunctionDeclaration') {
-            if (node.id?.type === 'Identifier' &&
-                !node.id.isMethod &&
-                this.isReservedName(node.id.name) &&
-                !renameMap.has(node.id.name)) {
-                renameMap.set(node.id.name, `${node.id.name}_$${this.paramRenameCounter++}`);
+            if (node.id?.type === 'Identifier' && !node.id.isMethod && this.isReservedName(node.id.name)) {
+                if (!renameMap.has(node.id.name)) {
+                    renameMap.set(node.id.name, `${node.id.name}_$${this.paramRenameCounter++}`);
+                }
+                this.userFunctionRenames.set(node.id.name, renameMap.get(node.id.name)!);
+                // Remember that this collision name is a user FUNCTION so that
+                // bare call sites `name(...)` follow the rename (see
+                // renameVariableRefsInAST). Overloads share one entry.
+                if (NAMESPACE_COLLISION_NAMES.has(node.id.name)) {
+                    this.userFunctionCollisions.add(node.id.name);
+                }
             }
+        }
+
+        // UDT named with a JS reserved word (`type new`, `type function`) —
+        // valid Pine, but `const new = Type({...})` is not valid JS.
+        if (node.type === 'TypeDefinition' && typeof node.name === 'string' && JS_RESERVED_WORDS.has(node.name)) {
+            if (!renameMap.has(node.name)) {
+                renameMap.set(node.name, `${node.name}_$${this.paramRenameCounter++}`);
+            }
+            this.renamedTypeNames.add(node.name);
         }
 
         for (const key of Object.keys(node)) {
@@ -182,19 +326,78 @@ export class CodeGenerator {
     private renameVariableRefsInAST(node: any, renameMap: Map<string, string>) {
         if (!node || typeof node !== 'object') return;
 
+        // FunctionDeclaration: rename the function's own name, then walk the
+        // parameters' defaults and the body with the parameter names removed
+        // from the map — a parameter shadows a same-named global, so body
+        // references must keep pointing at the parameter (which is renamed
+        // per function in generateFunctionDeclaration, if needed at all).
+        if (node.type === 'FunctionDeclaration') {
+            if (node.id?.type === 'Identifier' && renameMap.has(node.id.name)) {
+                node.id.name = renameMap.get(node.id.name)!;
+            }
+            if (node.id) node.id.returnType = this.renameTypeString(node.id.returnType, renameMap);
+            node.returnType = this.renameTypeString(node.returnType, renameMap);
+
+            let bodyMap = renameMap;
+            for (const p of node.params ?? []) {
+                const target = p.type === 'AssignmentPattern' ? p.left : p;
+                if (!target) continue;
+                target.varType = this.renameTypeString(target.varType, renameMap);
+                if (target.type === 'Identifier' && bodyMap.has(target.name)) {
+                    if (bodyMap === renameMap) bodyMap = new Map(renameMap);
+                    bodyMap.delete(target.name);
+                }
+            }
+            for (const p of node.params ?? []) {
+                if (p.type === 'AssignmentPattern' && p.right) this.renameVariableRefsInAST(p.right, bodyMap);
+            }
+            if (bodyMap.size > 0) this.renameVariableRefsInAST(node.body, bodyMap);
+            return;
+        }
+
+        // TypeDefinition: the type's own name plus field type annotations;
+        // field defaults are ordinary expressions.
+        if (node.type === 'TypeDefinition') {
+            if (typeof node.name === 'string' && renameMap.has(node.name)) {
+                node.name = renameMap.get(node.name)!;
+            }
+            for (const field of node.fields ?? []) {
+                field.type = this.renameTypeString(field.type, renameMap);
+                if (field.defaultValue) this.renameVariableRefsInAST(field.defaultValue, renameMap);
+            }
+            return;
+        }
+
+        // Explicit type annotations (`new n = new.new()`, `array<new> a = ...`)
+        // carried on declarators and identifiers.
+        if (node.type === 'VariableDeclarator') {
+            node.varType = this.renameTypeString(node.varType, renameMap);
+        }
+        if (node.type === 'Identifier') {
+            node.varType = this.renameTypeString(node.varType, renameMap);
+        }
+
         // CallExpression: handle direct-Identifier callees specially.
         if (node.type === 'CallExpression') {
             if (node.callee?.type === 'Identifier' && renameMap.has(node.callee.name)) {
                 // Two cases:
                 //   - JS_RESERVED_WORDS rename (e.g. user `method delete` → `delete_$N`):
                 //     the callee IS the user function — must be renamed.
-                //   - NAMESPACE_COLLISION_NAMES rename (e.g. user `var fill = ...` while
-                //     also calling the built-in `fill(...)`): the callee here refers to
-                //     the namespace, not the renamed user variable — leave it alone.
-                if (JS_RESERVED_WORDS.has(node.callee.name)) {
+                //   - NAMESPACE_COLLISION_NAMES rename of a user VARIABLE (e.g.
+                //     `var fill = ...` while also calling the built-in `fill(...)`):
+                //     the callee here refers to the namespace, not the renamed
+                //     variable — leave it alone.
+                //   - NAMESPACE_COLLISION_NAMES rename of a user FUNCTION
+                //     (`position(x) => ...` then `position(14)`): the callee IS the
+                //     user function — must be renamed.
+                if (JS_RESERVED_WORDS.has(node.callee.name) || this.userFunctionCollisions.has(node.callee.name)) {
                     node.callee.name = renameMap.get(node.callee.name)!;
                 }
                 // else: skip callee
+            } else if (node.callee?.type === 'Identifier' && this.userFunctionRenames.has(node.callee.name)) {
+                // A parameter of the enclosing function has the same name (`f(timeframe) =>
+                // timeframe(timeframe)`): a call still resolves to the renamed user function.
+                node.callee.name = this.userFunctionRenames.get(node.callee.name)!;
             } else {
                 this.renameVariableRefsInAST(node.callee, renameMap);
             }
@@ -210,8 +413,16 @@ export class CodeGenerator {
         // (e.g., size.tiny — size is a namespace, not a variable)
         // Also skip non-computed property identifiers (e.g., array.size)
         if (node.type === 'MemberExpression') {
-            if (!node.computed && node.object?.type === 'Identifier' && renameMap.has(node.object.name)) {
-                // size.tiny → namespace access, skip object, skip property
+            if (
+                !node.computed &&
+                node.object?.type === 'Identifier' &&
+                renameMap.has(node.object.name) &&
+                NAMESPACE_COLLISION_NAMES.has(node.object.name)
+            ) {
+                // size.tiny → namespace access, skip object, skip property.
+                // (A JS-reserved object — `new.new()`, `delete.x` — has no
+                // namespace to collide with: it IS the renamed user name and
+                // falls through to the generic rename below.)
                 return;
             }
             if (!node.computed && node.property?.type === 'Identifier' && renameMap.has(node.property.name)) {
@@ -364,6 +575,12 @@ export class CodeGenerator {
             case 'ReturnStatement':
                 return this.generateReturnStatement(node);
             case 'BlockStatement':
+                if (node._sequence) {
+                    // `a = 1, b = 2`: the statements belong to the enclosing block, so no braces
+                    // (they would hide the names from the next lines inside a switch-arm function).
+                    for (const stmt of node.body) this.generateStatement(stmt);
+                    return;
+                }
                 return this.generateBlockStatement(node);
             case 'TypeDefinition':
                 return this.generateTypeDefinition(node);
@@ -545,24 +762,43 @@ export class CodeGenerator {
             thisRenameMap.set('this', 'self');
         }
 
+        // Parameters named with a JS reserved word (`f(new) => new + 1`,
+        // `g(T delete) => delete.x`) — valid Pine, invalid JS. Unlike the
+        // namespace-shadowing renames above there is nothing to protect:
+        // `new.x` IS the parameter, so member objects are renamed as well
+        // (renameVariableRefsInAST semantics). The method receiver `this`
+        // is handled by the `self` rewrite instead.
+        const jsReservedParamMap = new Map<string, string>();
+        node.params.forEach((param: any, i: number) => {
+            const target = param.type === 'AssignmentPattern' ? param.left : param;
+            const paramName = target?.name;
+            if (!paramName || !JS_RESERVED_WORDS.has(paramName) || paramRenameMap.has(paramName)) return;
+            if (isMethod && i === 0 && paramName === 'this') return;
+            jsReservedParamMap.set(paramName, `${paramName}_$${this.paramRenameCounter++}`);
+        });
+
         // Apply renames to param nodes and function body.
-        if (paramRenameMap.size > 0 || thisRenameMap.size > 0) {
+        if (paramRenameMap.size > 0 || thisRenameMap.size > 0 || jsReservedParamMap.size > 0) {
             for (const param of node.params) {
                 const target = param.type === 'AssignmentPattern' ? param.left : param;
                 if (target?.type === 'Identifier') {
-                    const newName = paramRenameMap.get(target.name) ?? thisRenameMap.get(target.name);
+                    const newName =
+                        paramRenameMap.get(target.name) ?? thisRenameMap.get(target.name) ?? jsReservedParamMap.get(target.name);
                     if (newName) target.name = newName;
                 }
                 if (param.type === 'AssignmentPattern' && param.right) {
                     // Default value expressions get the same treatment as the body.
                     if (paramRenameMap.size > 0) this.renameParamRefsInBody(param.right, paramRenameMap);
                     if (thisRenameMap.size > 0) this.renameIdentifiersInAST(param.right, thisRenameMap);
+                    if (jsReservedParamMap.size > 0) this.renameVariableRefsInAST(param.right, jsReservedParamMap);
                 }
             }
             // Body: namespace-shadowing param renames first (context-aware),
-            // then the unconditional `this → self` rewrite.
+            // then the unconditional `this → self` rewrite, then JS-reserved
+            // parameter names.
             if (paramRenameMap.size > 0) this.renameParamRefsInBody(node.body, paramRenameMap);
             if (thisRenameMap.size > 0) this.renameIdentifiersInAST(node.body, thisRenameMap);
+            if (jsReservedParamMap.size > 0) this.renameVariableRefsInAST(node.body, jsReservedParamMap);
         }
 
         // Methods get a `$M_` prefix on their JS identifier so they can't
@@ -570,7 +806,16 @@ export class CodeGenerator {
         // not allow `$` in identifiers, so this prefix is collision-proof.
         // The call-site rewrite (ExpressionTransformer) and the marker reader
         // (AnalysisPass) both know about the prefix.
-        const jsFnName = isMethod ? `$M_${node.id.name}` : node.id.name;
+        // Pine allows several methods of one name on different receiver types
+        // (`method set(line ln, ...)` and `method set(box bx, ...)`). They would
+        // all hoist to the same JS function, so the second and later overloads get
+        // a `$<n>` suffix; AnalysisPass registers them all under the Pine name.
+        let jsFnName = node.id.name;
+        if (isMethod) {
+            const seen = (this.methodNameCounts.get(node.id.name) ?? 0) + 1;
+            this.methodNameCounts.set(node.id.name, seen);
+            jsFnName = seen === 1 ? `$M_${node.id.name}` : `$M_${node.id.name}$${seen}`;
+        }
 
         this.write('function ');
         this.write(jsFnName);
@@ -580,15 +825,20 @@ export class CodeGenerator {
         // receiver for methods. The receiver is passed explicitly by the
         // call-site rewrite, so it must appear in the param list.
         const params = node.params;
+        const stringVars = new Map<string, boolean>();
 
         for (let i = 0; i < params.length; i++) {
             const param = params[i];
             if (param.type === 'Identifier') {
                 this.write(param.name);
+                stringVars.set(param.name, isStringType(param.varType));
             } else if (param.type === 'AssignmentPattern') {
+                const isString = isStringType(param.left.varType);
+                stringVars.set(param.left.name, isString);
                 this.write(param.left.name);
                 this.write(' = ');
-                this.generateExpression(param.right);
+                if (isString && isNaIdentifier(param.right)) this.write('""');
+                else this.generateExpression(param.right);
             }
             if (i < params.length - 1) {
                 this.write(', ');
@@ -596,7 +846,12 @@ export class CodeGenerator {
         }
 
         this.write(') ');
-        this.generateBlockStatement(node.body, false);
+        this.stringVarScopes.push(stringVars);
+        try {
+            this.generateBlockStatement(node.body, false);
+        } finally {
+            this.stringVarScopes.pop();
+        }
         this.write('\n');
 
         // Emit method marker so the transpile phase can distinguish Pine `method`
@@ -657,6 +912,14 @@ export class CodeGenerator {
         for (let i = 0; i < node.declarations.length; i++) {
             const decl = node.declarations[i];
 
+            // Pine's `_` discard identifier may be re-declared freely; give each
+            // occurrence a unique JS name before any path below reads `decl.id`.
+            if (decl.id?.type === 'Identifier' && decl.id.name === '_') {
+                decl.id.name = this.freshDiscardName();
+            } else if (decl.id?.type === 'ArrayPattern') {
+                this.renameDiscardTargets(decl.id.elements);
+            }
+
             // Check if init is a complex if expression that needs statement-based generation
             if (decl.init && decl.init.type === 'ConditionalExpression' && decl.init.needsIIFE) {
                 // Generate: let varName;\n if (...) { varName = ... } else { varName = ... }
@@ -684,29 +947,21 @@ export class CodeGenerator {
             if (decl.id.type === 'Identifier') {
                 this.write(decl.id.name);
             } else if (decl.id.type === 'ArrayPattern') {
-                // Tuple destructuring — deduplicate discard placeholders like `_`
-                // Pine Script allows [a, _, _] but JS forbids duplicate names in destructuring
-                const seen = new Set<string>();
+                // Tuple destructuring (`_` targets already renamed above)
                 this.write('[');
-                for (let j = 0; j < decl.id.elements.length; j++) {
-                    let name = decl.id.elements[j].name;
-                    if (seen.has(name)) {
-                        const unique = `${name}${this.paramRenameCounter++}`;
-                        decl.id.elements[j].name = unique;
-                        name = unique;
-                    }
-                    seen.add(name);
-                    this.write(name);
-                    if (j < decl.id.elements.length - 1) {
-                        this.write(', ');
-                    }
-                }
+                this.write(decl.id.elements.map((el) => el.name).join(', '));
                 this.write(']');
             }
 
+            const isString =
+                decl.id.type === 'Identifier' &&
+                (decl.id.varType ? isStringType(decl.id.varType) : decl.init?.type === 'Literal' && typeof decl.init.value === 'string');
+            if (decl.id.type === 'Identifier') this.stringVarScopes[this.stringVarScopes.length - 1].set(decl.id.name, isString);
+
             if (decl.init) {
                 this.write(' = ');
-                this.generateExpression(decl.init);
+                if (isString && isNaIdentifier(decl.init)) this.write('""');
+                else this.generateExpression(decl.init);
             }
 
             this.write(';\n');
@@ -1096,22 +1351,10 @@ export class CodeGenerator {
                 if (decl.id.type === 'Identifier') {
                     this.write(decl.id.name);
                 } else if (decl.id.type === 'ArrayPattern') {
-                    // Destructuring: [a, b] — deduplicate discard placeholders
-                    const seen = new Set<string>();
+                    // Destructuring: [a, b] — rename `_` discard placeholders
+                    this.renameDiscardTargets(decl.id.elements);
                     this.write('[');
-                    for (let i = 0; i < decl.id.elements.length; i++) {
-                        let name = decl.id.elements[i].name;
-                        if (seen.has(name)) {
-                            const unique = `${name}${this.paramRenameCounter++}`;
-                            decl.id.elements[i].name = unique;
-                            name = unique;
-                        }
-                        seen.add(name);
-                        this.write(name);
-                        if (i < decl.id.elements.length - 1) {
-                            this.write(', ');
-                        }
-                    }
+                    this.write(decl.id.elements.map((el) => el.name).join(', '));
                     this.write(']');
                 }
 
@@ -1257,7 +1500,8 @@ export class CodeGenerator {
             // required so the int/float type inference can distinguish `2` from
             // `2.0` (`int / int` truncates in Pine, `int / float` does not).
             const s = String(node.value);
-            if (typeof node.raw === 'string' && node.raw.includes('.') && !/[.eE]/.test(s)) {
+            // An exponent (`10e6`) also makes a float literal.
+            if (typeof node.raw === 'string' && /[.eE]/.test(node.raw) && !/[.eE]/.test(s)) {
                 this.write(s + '.0');
             } else {
                 this.write(s);
@@ -1344,7 +1588,19 @@ export class CodeGenerator {
 
         this.write(op);
         this.write(' ');
-        this.generateExpression(node.right);
+        if (op === '=' && node.left.type === 'Identifier' && isNaIdentifier(node.right) && this.isStringVariable(node.left.name)) {
+            this.write('""');
+        } else {
+            this.generateExpression(node.right);
+        }
+    }
+
+    private isStringVariable(name: string): boolean {
+        for (let i = this.stringVarScopes.length - 1; i >= 0; i--) {
+            const known = this.stringVarScopes[i].get(name);
+            if (known !== undefined) return known;
+        }
+        return false;
     }
 
     // Generate UpdateExpression
@@ -1887,9 +2143,9 @@ export class CodeGenerator {
             if (c.test) {
                 this.write('case ');
                 this.generateExpression(c.test);
-                this.write(':\n');
+                this.write(': {\n');
             } else {
-                this.write('default:\n');
+                this.write('default: {\n');
             }
 
             this.indent++;
@@ -1935,11 +2191,14 @@ export class CodeGenerator {
             }
 
             this.indent--;
+            this.write(this.indentStr.repeat(this.indent));
+            this.write('}\n');
         }
 
         this.indent--;
         this.write(this.indentStr.repeat(this.indent));
         this.write('}\n'); // end switch
+        this.writeNaForMissingDefault(node);
 
         this.indent--;
         this.write(this.indentStr.repeat(this.indent));
@@ -2014,10 +2273,27 @@ export class CodeGenerator {
                 this.write('\n');
             }
         }
+        this.writeNaForMissingDefault(node);
 
         this.indent--;
         this.write(this.indentStr.repeat(this.indent));
         this.write('})()');
+    }
+
+    // A switch used as a value is na when no arm matches and there is no default arm
+    // (the na string, "", when every arm is a string literal).
+    writeNaForMissingDefault(node) {
+        if (node.cases.some((c) => !c.test)) return;
+        const armValue = (c: any) => {
+            const last = c.statements?.length ? c.statements[c.statements.length - 1] : null;
+            return last ? (last.type === 'ExpressionStatement' ? last.expression : null) : c.consequent;
+        };
+        const stringArms = node.cases.length > 0 && node.cases.every((c) => {
+            const v = armValue(c);
+            return v?.type === 'Literal' && typeof v.value === 'string';
+        });
+        this.write(this.indentStr.repeat(this.indent));
+        this.write(stringArms ? 'return "";\n' : 'return na;\n');
     }
 
     // Generate switch without discriminant as if/else if/else chain (for statement context)

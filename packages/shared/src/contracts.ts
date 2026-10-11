@@ -237,9 +237,12 @@ export interface HistoricalCandleRecoveryEvidence {
   }>;
 }
 
+/** Version of the vendored PineTS engine (vendor/pinets/UPSTREAM.md). */
+export const PINETS_VERSION = '0.11.0';
+
 export interface BacktestResponse {
   runId: string;
-  runtime: { name: 'PineTS'; version: '0.9.33'; isolatedProcess: true };
+  runtime: { name: 'PineTS'; version: string; isolatedProcess: true };
   data: {
     provider: '0xArchive' | 'Binance Futures';
     venue: 'hyperliquid' | 'binance';

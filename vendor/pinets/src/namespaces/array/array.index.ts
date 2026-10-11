@@ -5,6 +5,7 @@
 export { PineArrayObject } from './PineArrayObject';
 
 import { PineArrayObject } from './PineArrayObject';
+import { __from_int } from './methods/__from_int';
 import { from } from './methods/from';
 import { new_fn } from './methods/new';
 import { new_bool } from './methods/new_bool';
@@ -25,6 +26,7 @@ export class PineArray {
   constructor(private context: any) {
 
     // Install methods
+    this.__from_int = __from_int(context);
     this.abs = (id: PineArrayObject, ...args: any[]) => id.abs(...args);
     this.avg = (id: PineArrayObject, ...args: any[]) => id.avg(...args);
     this.binary_search = (id: PineArrayObject, ...args: any[]) => id.binary_search(...args);

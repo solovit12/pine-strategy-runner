@@ -1,0 +1,94 @@
+{
+  "revision": "f3c5702f5c82872b9981c7859d47b667d4bcb999",
+  "archiveUrl": "https://codeload.github.com/nautechsystems/nautilus_trader/tar.gz/f3c5702f5c82872b9981c7859d47b667d4bcb999",
+  "archiveBytes": 27186358,
+  "archiveSha256": "cb166f96c62fee3b3fb83590d779db8c9486afaeee64af2b35eef2c9925e04d4",
+  "candidateVersion": "2.0.0rc6.dev20260929+hlfast5.1",
+  "patch": "hyperliquid-fast5.patch",
+  "patchSha256": "23052755bf999ade9a402fd93b3225e5c6ddb981b2b1fbdf6ef5215187ca420e",
+  "files": [
+    {
+      "path": "crates/adapters/hyperliquid/src/data.rs",
+      "upstreamSha256": "9e6ec65525f1327a7e0433459950b15da2cf015f9e46117327d2cdb01c783397",
+      "patchedSha256": "d04900a7a4dc1906cb7a7d6e84ad687ff919d0632a7784006b5b984c4ebd870f"
+    },
+    {
+      "path": "crates/adapters/hyperliquid/src/python/mod.rs",
+      "upstreamSha256": "4c922e435f4d3f94f1e1fb059af8056efc6be8b0701df3641ec01d63fe36b954",
+      "patchedSha256": "5f8c8f09a4f3b0636a07798d9eca6384b5822dc728b31fc4914fb9f335890d06"
+    },
+    {
+      "path": "crates/adapters/hyperliquid/src/websocket/book.rs",
+      "upstreamSha256": "ef7a3c79b2d777cd1d9ecee27dc00a766c5e34b8f3d365f7fa4e734d57dc092c",
+      "patchedSha256": "b4f0f6d436642ab78c00324ff30da0bc1f49a7a80f8ea10c261019206371eabd"
+    },
+    {
+      "path": "crates/adapters/hyperliquid/src/websocket/client.rs",
+      "upstreamSha256": "280bbfdc64201f3bb30bca6e0766e199c0fb98f6aafe33847d0e0cb0aff85f92",
+      "patchedSha256": "5e2f444f9d269b07c713c022b5aaecc3be9330d1aeedd15e491df021cf16e25a"
+    },
+    {
+      "path": "crates/adapters/hyperliquid/src/websocket/messages.rs",
+      "upstreamSha256": "e9f33e635dfd7db7d35cb7449e76f1c632e3f32d63dc31f3ce28312ee3651e1b",
+      "patchedSha256": "3869c4399ec34d68d3c3116529bf6a4a28ece359aa8104ef3878887f96569a85"
+    },
+    {
+      "path": "crates/adapters/hyperliquid/src/websocket/parse.rs",
+      "upstreamSha256": "2c5338dacea1cf84b267ebb4276ede35e20743792d56646dea337978292b4a03",
+      "patchedSha256": "3d8628af9c4c2ec10f34f57f0aebec0ea702c3a3016b12e74e44dd2a4dd09d6a"
+    },
+    {
+      "path": "crates/adapters/hyperliquid/tests/integration/websocket.rs",
+      "upstreamSha256": "8dd444d1cff96358440e6d7006ff6a19f8f3b9a79cba4a84e922bcf23e53a62c",
+      "patchedSha256": "2d731ae20372822c134e53deb401567ad92d34276eea6e5ae838bc5ac474aea4"
+    },
+    {
+      "path": "python/nautilus_trader/adapters/hyperliquid/__init__.py",
+      "upstreamSha256": "2188e2ef55f0927e954eb9ce78d5430eaad84e61a9645e3c0178a0dfd05b3612",
+      "patchedSha256": "fa54bebeb75172a8623b30c466b923b4c9b5fb063bd89f7ffb5e4cd76570c4bc"
+    },
+    {
+      "path": "python/nautilus_trader/adapters/hyperliquid/__init__.pyi",
+      "upstreamSha256": "333f5de2ba9fc670293d1a973398d189cca3ceb02261b8210bfe942393fd1332",
+      "patchedSha256": "2c06d2a38ef0f8666873ed7869de6322c0f80ae2682d52ca5e2aee9d080983c7"
+    },
+    {
+      "path": "python/pyproject.toml",
+      "upstreamSha256": "ee943077fb957497b231c382eabcd3d625a93cf064864da3c43a1b42320aa0f4",
+      "patchedSha256": "ae486b06bc724d2a9fb77aae5aacef48ed7ad24d67dff3ae3854f3446500ad2f"
+    }
+  ],
+  "toolchain": {
+    "rust": "1.98.1",
+    "maturin": "1.15.0",
+    "python": "3.12",
+    "target": "aarch64-apple-darwin",
+    "macosDeploymentTarget": "11.0",
+    "sdk": "/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk",
+    "buildJobs": 2,
+    "nice": 10,
+    "gitCeilingDirectories": "$FAST_ROOT"
+  },
+  "features": [
+    "extension-module",
+    "arrow",
+    "betfair",
+    "high-precision",
+    "mimalloc",
+    "redis",
+    "postgres",
+    "defi",
+    "hypersync",
+    "tracing-bridge"
+  ],
+  "originalWheelSha256": "dd2b6e335f468acacc9c3a4b318537e35187d5fa3564807cacee4a3d2ab35e40",
+  "nativeCapability": "nautilus_trader.adapters.hyperliquid.HYPERLIQUID_FAST_BOOK_SUPPORTED",
+  "buildProvenance": "Archive has no Git metadata; process-local GIT_CEILING_DIRECTORIES prevents embedding the parent repository revision. Manifest pins upstream revision and all patched file hashes.",
+  "builtArtifact": {
+    "wheelBytes": 59724815,
+    "wheelSha256": "365415911b702671df3baff1b3ae1259af05a166f2be85b5f67fa3bca57625ef",
+    "librarySha256": "80f78394c8397cac209fbfdd76308733304c7c4638f28bea5493796a7fdd3478",
+    "wheelFile": "nautilus_trader-2.0.0rc6.dev20260929+hlfast5.1-cp312-cp312-macosx_11_0_arm64.whl",
+    "libraryBytes": 141252448
+  }
+}

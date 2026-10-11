@@ -1,0 +1,232 @@
+{
+  "schemaVersion": 1,
+  "source": "https://data-api.binance.vision/api/v3/klines",
+  "documentation": "https://github.com/binance/binance-spot-api-docs/blob/master/faqs/market_data_only.md",
+  "symbol": "BTCUSDT",
+  "interval": "1h",
+  "timezone": "UTC",
+  "startInclusive": "2017-08-17T04:00:00.000Z",
+  "endExclusive": "2026-09-01T02:00:00.000Z",
+  "expectedRows": 79246,
+  "rows": 79118,
+  "firstOpenTime": "2017-08-17T04:00:00.000Z",
+  "lastOpenTime": "2026-09-01T01:00:00.000Z",
+  "continuous": false,
+  "missingBars": 128,
+  "gaps": [
+    {
+      "after": "2017-09-06T16:00:00.000Z",
+      "resumesAt": "2017-09-06T23:00:00.000Z",
+      "missingBars": 6
+    },
+    {
+      "after": "2018-01-04T03:00:00.000Z",
+      "resumesAt": "2018-01-04T05:00:00.000Z",
+      "missingBars": 1
+    },
+    {
+      "after": "2018-02-08T00:00:00.000Z",
+      "resumesAt": "2018-02-09T10:00:00.000Z",
+      "missingBars": 33
+    },
+    {
+      "after": "2018-06-26T01:00:00.000Z",
+      "resumesAt": "2018-06-26T12:00:00.000Z",
+      "missingBars": 10
+    },
+    {
+      "after": "2018-06-27T12:00:00.000Z",
+      "resumesAt": "2018-06-27T14:00:00.000Z",
+      "missingBars": 1
+    },
+    {
+      "after": "2018-07-04T00:00:00.000Z",
+      "resumesAt": "2018-07-04T08:00:00.000Z",
+      "missingBars": 7
+    },
+    {
+      "after": "2018-10-19T05:00:00.000Z",
+      "resumesAt": "2018-10-19T09:00:00.000Z",
+      "missingBars": 3
+    },
+    {
+      "after": "2018-11-14T01:00:00.000Z",
+      "resumesAt": "2018-11-14T09:00:00.000Z",
+      "missingBars": 7
+    },
+    {
+      "after": "2019-03-12T01:00:00.000Z",
+      "resumesAt": "2019-03-12T08:00:00.000Z",
+      "missingBars": 6
+    },
+    {
+      "after": "2019-05-15T02:00:00.000Z",
+      "resumesAt": "2019-05-15T13:00:00.000Z",
+      "missingBars": 10
+    },
+    {
+      "after": "2019-08-15T01:00:00.000Z",
+      "resumesAt": "2019-08-15T10:00:00.000Z",
+      "missingBars": 8
+    },
+    {
+      "after": "2019-11-13T01:00:00.000Z",
+      "resumesAt": "2019-11-13T04:00:00.000Z",
+      "missingBars": 2
+    },
+    {
+      "after": "2019-11-25T01:00:00.000Z",
+      "resumesAt": "2019-11-25T04:00:00.000Z",
+      "missingBars": 2
+    },
+    {
+      "after": "2020-02-09T01:00:00.000Z",
+      "resumesAt": "2020-02-09T03:00:00.000Z",
+      "missingBars": 1
+    },
+    {
+      "after": "2020-02-19T11:00:00.000Z",
+      "resumesAt": "2020-02-19T17:00:00.000Z",
+      "missingBars": 5
+    },
+    {
+      "after": "2020-03-04T09:00:00.000Z",
+      "resumesAt": "2020-03-04T11:00:00.000Z",
+      "missingBars": 1
+    },
+    {
+      "after": "2020-04-25T01:00:00.000Z",
+      "resumesAt": "2020-04-25T04:00:00.000Z",
+      "missingBars": 2
+    },
+    {
+      "after": "2020-06-28T01:00:00.000Z",
+      "resumesAt": "2020-06-28T05:00:00.000Z",
+      "missingBars": 3
+    },
+    {
+      "after": "2020-11-30T05:00:00.000Z",
+      "resumesAt": "2020-11-30T07:00:00.000Z",
+      "missingBars": 1
+    },
+    {
+      "after": "2020-12-21T13:00:00.000Z",
+      "resumesAt": "2020-12-21T18:00:00.000Z",
+      "missingBars": 4
+    },
+    {
+      "after": "2020-12-25T01:00:00.000Z",
+      "resumesAt": "2020-12-25T03:00:00.000Z",
+      "missingBars": 1
+    },
+    {
+      "after": "2021-02-11T03:00:00.000Z",
+      "resumesAt": "2021-02-11T05:00:00.000Z",
+      "missingBars": 1
+    },
+    {
+      "after": "2021-03-06T01:00:00.000Z",
+      "resumesAt": "2021-03-06T03:00:00.000Z",
+      "missingBars": 1
+    },
+    {
+      "after": "2021-04-20T01:00:00.000Z",
+      "resumesAt": "2021-04-20T04:00:00.000Z",
+      "missingBars": 2
+    },
+    {
+      "after": "2021-04-25T04:00:00.000Z",
+      "resumesAt": "2021-04-25T08:00:00.000Z",
+      "missingBars": 3
+    },
+    {
+      "after": "2021-08-13T01:00:00.000Z",
+      "resumesAt": "2021-08-13T06:00:00.000Z",
+      "missingBars": 4
+    },
+    {
+      "after": "2021-09-29T06:00:00.000Z",
+      "resumesAt": "2021-09-29T09:00:00.000Z",
+      "missingBars": 2
+    },
+    {
+      "after": "2023-03-24T12:00:00.000Z",
+      "resumesAt": "2023-03-24T14:00:00.000Z",
+      "missingBars": 1
+    }
+  ],
+  "closeTimeAnomalies": [
+    {
+      "openTime": "2017-09-06T16:00:00.000Z",
+      "closeTime": "2017-09-06T16:00:00.000Z",
+      "volume": "0.00000000"
+    },
+    {
+      "openTime": "2017-12-18T12:00:00.000Z",
+      "closeTime": "2017-12-18T12:29:13.419Z",
+      "volume": "242.02821800"
+    },
+    {
+      "openTime": "2018-01-04T03:00:00.000Z",
+      "closeTime": "2018-01-04T03:00:14.838Z",
+      "volume": "4.63518100"
+    },
+    {
+      "openTime": "2018-02-08T00:00:00.000Z",
+      "closeTime": "2018-02-08T00:28:14.788Z",
+      "volume": "1521.53731800"
+    },
+    {
+      "openTime": "2018-07-04T00:00:00.000Z",
+      "closeTime": "2018-07-04T00:22:25.551Z",
+      "volume": "1543.48440200"
+    },
+    {
+      "openTime": "2019-06-07T21:00:00.000Z",
+      "closeTime": "2019-06-07T21:13:13.524Z",
+      "volume": "0.00000000"
+    },
+    {
+      "openTime": "2020-02-19T11:00:00.000Z",
+      "closeTime": "2020-02-19T11:35:32.286Z",
+      "volume": "405.96951100"
+    },
+    {
+      "openTime": "2020-03-04T09:00:00.000Z",
+      "closeTime": "2020-03-04T09:21:46.694Z",
+      "volume": "254.39256900"
+    },
+    {
+      "openTime": "2020-12-21T13:00:00.000Z",
+      "closeTime": "2020-12-21T13:47:20.521Z",
+      "volume": "3685.45440500"
+    },
+    {
+      "openTime": "2021-02-11T03:00:00.000Z",
+      "closeTime": "2021-02-11T03:40:54.773Z",
+      "volume": "0.00000000"
+    },
+    {
+      "openTime": "2021-04-25T04:00:00.000Z",
+      "closeTime": "2021-04-25T04:00:58.146Z",
+      "volume": "5.88703400"
+    },
+    {
+      "openTime": "2021-08-13T01:00:00.000Z",
+      "closeTime": "2021-08-13T01:59:59.000Z",
+      "volume": "1980.12661900"
+    },
+    {
+      "openTime": "2021-12-24T04:00:00.000Z",
+      "closeTime": "2021-12-24T04:59:54.362Z",
+      "volume": "560.62320000"
+    },
+    {
+      "openTime": "2023-03-24T12:00:00.000Z",
+      "closeTime": "2023-03-24T12:39:41.646Z",
+      "volume": "0.00000000"
+    }
+  ],
+  "csvSha256": "a6e4170e9beef66d2fb13c0c54a2e30fad71d1261349595640d4201c7a15c238",
+  "fetchedAtUtc": "2026-09-05T15:30:13.022Z"
+}

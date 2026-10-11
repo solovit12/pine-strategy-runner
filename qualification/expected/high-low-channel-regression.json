@@ -1,0 +1,34 @@
+{
+  "schemaVersion": 1,
+  "source": "User-supplied TradingView screenshots captured on 2026-09-05",
+  "strategyFile": "../strategies/08-high-low-channel.pine",
+  "tradingViewScreenshot": {
+    "dateRange": { "start": "2025-01-01", "end": "2026-09-05" },
+    "initialCapital": 1000000,
+    "commissionPercent": 0,
+    "totalProfit": 1794.89,
+    "maxDrawdown": 33221.42,
+    "totalTrades": 330,
+    "winningTrades": 113,
+    "winRatePercent": 34.24,
+    "capturedOpenCandle": {
+      "openTime": "2026-09-05T17:00:00.000Z",
+      "open": 80041.99,
+      "closeAtCapture": 80072.01,
+      "openProfit": 30.02
+    }
+  },
+  "frozenLocalRegression": {
+    "dateRange": { "start": "2025-01-01", "end": "2026-09-01" },
+    "dataSha256": "36f507d4130cd720c51cdae29f18e789d98ca80390084ac2244285658ba48222",
+    "bars": 14594,
+    "netProfit": 2896.7700000001496,
+    "openProfit": -486.7300000000105,
+    "totalProfit": 2410.040000000139,
+    "maxDrawdown": 33221.42,
+    "totalTrades": 326,
+    "winningTrades": 112,
+    "winRatePercent": 34.355828220858896
+  },
+  "note": "The screenshot Total P&L is time-sensitive because it includes the open position. Closed-trade count, winners, win rate and max drawdown are stable comparison points."
+}

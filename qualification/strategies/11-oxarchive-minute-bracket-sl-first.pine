@@ -1,0 +1,24 @@
+//@version=6
+strategy("OX03 Hyperliquid Minute Bracket SL First", overlay=true, initial_capital=100000,
+     default_qty_type=strategy.fixed, default_qty_value=0.01,
+     pyramiding=1, commission_type=strategy.commission.percent,
+     commission_value=0.045, slippage=0,
+     margin_long=100, margin_short=100,
+     calc_on_order_fills=false, calc_on_every_tick=false,
+     process_orders_on_close=false, use_bar_magnifier=false)
+
+// time_close makes the local 1h run and the TradingView 1m run create the
+// orders at the same UTC boundary. Both market entries fill at 18:00 UTC.
+int ENTRY_TIME = timestamp("UTC", 2026, 9, 15, 18, 0)
+float TAKE_PROFIT = 77100.0
+float STOP_LOSS = 76600.0
+
+var bool submitted = false
+
+if time_close == ENTRY_TIME and not submitted
+    strategy.entry("Long", strategy.long)
+    strategy.exit("Bracket", from_entry="Long", limit=TAKE_PROFIT, stop=STOP_LOSS)
+    submitted := true
+
+plot(TAKE_PROFIT, "Take profit", color=color.green)
+plot(STOP_LOSS, "Stop loss", color=color.red)

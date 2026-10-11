@@ -1,0 +1,10 @@
+# Build the image from this folder instead of downloading it:
+#   docker compose -f compose.yaml -f compose.build.yaml up -d --build
+# NAUTILUS_WHEEL=prebuilt reuses the published Nautilus wheel; source compiles it here.
+services:
+  psr:
+    image: pine-strategy-runner:local
+    build:
+      context: .
+      args:
+        NAUTILUS_WHEEL: ${NAUTILUS_WHEEL:-source}

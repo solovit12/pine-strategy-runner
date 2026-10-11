@@ -1,0 +1,28 @@
+//@version=6
+strategy("Q03 EMA Crossover", overlay=true, initial_capital=100000,
+     default_qty_type=strategy.fixed, default_qty_value=0.01,
+     pyramiding=1, commission_type=strategy.commission.percent,
+     commission_value=0.1, slippage=0, process_orders_on_close=false)
+
+int START_TIME = timestamp("UTC", 2026, 6, 1, 0, 0)
+int END_TIME = timestamp("UTC", 2026, 9, 1, 0, 0)
+bool inWindow = time >= START_TIME and time < END_TIME
+bool afterWindow = time >= END_TIME
+
+float fastEma = ta.ema(close, 12)
+float slowEma = ta.ema(close, 26)
+bool longSignal = ta.crossover(fastEma, slowEma)
+bool exitSignal = ta.crossunder(fastEma, slowEma)
+
+if inWindow and longSignal
+    strategy.entry("Long", strategy.long)
+
+if inWindow and exitSignal and strategy.position_size > 0
+    strategy.close("Long", comment="EMA cross down")
+
+if afterWindow and strategy.position_size != 0
+    strategy.close_all(comment="Window end")
+
+plot(fastEma, "EMA 12", color=color.blue)
+plot(slowEma, "EMA 26", color=color.orange)
+

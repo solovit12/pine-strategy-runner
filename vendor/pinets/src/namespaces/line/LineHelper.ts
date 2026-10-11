@@ -1,0 +1,405 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
+import { Series } from '../../Series';
+import { parseArgsForPineParams } from '../utils';
+import { LineObject } from './LineObject';
+import { ChartPointObject } from '../chart/ChartPointObject';
+import { NAHelper } from '../Core';
+import { silentInSecondary } from '../silentInSecondary';
+
+//prettier-ignore
+const LINE_NEW_SIGNATURES = [
+    ['x1', 'y1', 'x2', 'y2', 'xloc', 'extend', 'color', 'style', 'width', 'force_overlay'],
+    ['first_point', 'second_point', 'xloc', 'extend', 'color', 'style', 'width', 'force_overlay'],
+];
+
+//prettier-ignore
+const LINE_NEW_ARGS_TYPES = {
+    x1: 'number', y1: 'number', x2: 'number', y2: 'number',
+    xloc: 'string', extend: 'string', color: 'color', style: 'string',
+    width: 'number', force_overlay: 'boolean',
+    first_point: 'point', second_point: 'point',
+};
+
+export class LineHelper {
+    private _lines: LineObject[] = [];
+
+    constructor(private context: any) {}
+
+    param(source: any, index: number = 0, name?: string) {
+        return Series.from(source).get(index);
+    }
+
+    private _ensurePlotsEntry() {
+        if (!this.context.plots['__lines__']) {
+            this.context.plots['__lines__'] = {
+                title: '__lines__',
+                data: [],
+                options: { style: 'drawing_line', overlay: this.context.indicator?.overlay || false },
+            };
+        }
+    }
+
+    public syncToPlot() {
+        this._ensurePlotsEntry();
+        const time = this.context.marketData[0]?.openTime || 0;
+        // Compact out deleted objects so the backing array stays bounded to the
+        // active set. Without this it grows O(bars·objects), and every syncToPlot
+        // / _enforceMaxCount scan over it becomes O(that) → quadratic overall
+        // (RC3). Transparent: the emitted set is unchanged (deleted objects were
+        // already filtered out). rollbackFromBar filters by _createdAtBar, which
+        // is orthogonal to _deleted, so streaming rollback is unaffected.
+        this._lines = this._lines.filter(ln => !ln._deleted);
+        const allPlotData = this._lines.map(ln => ln.toPlotData());
+
+        // Split force_overlay objects into a separate overlay plot (renders on main chart pane)
+        const regular = allPlotData.filter((l: any) => !l.force_overlay);
+        const overlay = allPlotData.filter((l: any) => l.force_overlay);
+
+        this.context.plots['__lines__'].data = [{
+            time,
+            value: regular,
+            options: { style: 'drawing_line' },
+        }];
+
+        if (overlay.length > 0) {
+            this.context.plots['__lines_overlay__'] = {
+                title: '__lines_overlay__',
+                data: [{ time, value: overlay, options: { style: 'drawing_line' } }],
+                options: { style: 'drawing_line', overlay: true },
+            };
+        } else {
+            delete this.context.plots['__lines_overlay__'];
+        }
+    }
+
+    private _resolvePoint(point: ChartPointObject): { x: number; xloc: string } {
+        // Treat NaN as "not provided" so `chart.point.new(time, na, price)`
+        // (idiomatic in TV-published indicators — e.g. SMC's drawStructure)
+        // correctly resolves to a time-based point. Without the NaN check,
+        // `point.index !== undefined` is true for NaN and the helper
+        // returns x = NaN, leaving every line/box with x1=NaN/x2=NaN.
+        const hasIndex = point.index !== undefined &&
+            !(typeof point.index === 'number' && isNaN(point.index));
+        const hasTime = point.time !== undefined &&
+            !(typeof point.time === 'number' && isNaN(point.time));
+        if (hasIndex) return { x: point.index!, xloc: 'bi' };
+        if (hasTime) return { x: point.time!, xloc: 'bt' };
+        return { x: 0, xloc: 'bi' };
+    }
+
+    /**
+     * Resolve a value that may be a Series, a bound function, or a plain scalar.
+     * Pine Script variables (inputs, chart properties) can be stored as Series
+     * objects or bound methods in the PineTS runtime. This ensures the resolved
+     * scalar value is used for line properties.
+     */
+    private _resolve(val: any): any {
+        if (val === null || val === undefined) return val;
+        // NAHelper (na) → resolve to NaN
+        if (val instanceof NAHelper) return NaN;
+        // Resolve Series-like objects (has data array and get method)
+        if (typeof val === 'object' && Array.isArray(val.data) && typeof val.get === 'function') {
+            return val.get(0);
+        }
+        // Resolve bound functions (like chart.bg_color, chart.fg_color)
+        if (typeof val === 'function') {
+            return val();
+        }
+        return val;
+    }
+
+    /**
+     * Resolve a color value, PRESERVING na markers so renderers can
+     * detect "no color". Pine emits na as null (from `color(na)` —
+     * `color.any` returns null) or NaN (from raw `na` literal). Both
+     * must survive into the plot data — collapsing them to a default
+     * forces the renderer to paint a visible line where the script
+     * asked for none. Mirrors Box/Polyline `_resolveColor`.
+     */
+    private _resolveColor(val: any): any {
+        const resolved = this._resolve(val);
+        if (resolved === null || resolved === undefined) return resolved;
+        if (typeof resolved === 'number' && isNaN(resolved)) return NaN;
+        return resolved;
+    }
+
+    private _createLine(
+        x1: number,
+        y1: number,
+        x2: number,
+        y2: number,
+        xloc: string = 'bi',
+        extend: string = 'none',
+        color: string = '',
+        style: string = 'style_solid',
+        width: number = 1,
+        force_overlay: boolean = false,
+    ): LineObject {
+        // Resolve any Series/function values to scalars for line properties
+        const ln = new LineObject(
+            x1, y1, x2, y2, xloc,
+            this._resolve(extend),
+            this._resolveColor(color),
+            this._resolve(style),
+            this._resolve(width) || 1,
+            force_overlay,
+        );
+        ln._helper = this;
+        ln._createdAtBar = this.context.idx;
+        this._lines.push(ln);
+        this._enforceMaxCount();
+        return ln;
+    }
+
+    private _enforceMaxCount(): void {
+        const maxCount = this.context.indicator?.max_lines_count ?? 50;
+        const active = this._lines.filter(l => !l._deleted);
+        if (active.length > maxCount) {
+            const toRemove = active.length - maxCount;
+            let removed = 0;
+            for (const l of this._lines) {
+                if (removed >= toRemove) break;
+                if (!l._deleted) {
+                    l._deleted = true;
+                    removed++;
+                }
+            }
+        }
+    }
+
+    // line.new() — explicit Pine Script factory method
+    // Supports two signatures:
+    //   line.new(x1, y1, x2, y2, xloc, extend, color, style, width, force_overlay)
+    //   line.new(first_point, second_point, xloc, extend, color, style, width, force_overlay)
+    @silentInSecondary
+    new(...args: any[]): LineObject {
+        const parsed = parseArgsForPineParams<any>(args, LINE_NEW_SIGNATURES, LINE_NEW_ARGS_TYPES);
+
+        let x1: number;
+        let y1: number;
+        let x2: number;
+        let y2: number;
+        let xloc: string = parsed.xloc;
+
+        if (parsed.first_point instanceof ChartPointObject) {
+            const pt1 = parsed.first_point as ChartPointObject;
+            const pt2 = parsed.second_point as ChartPointObject;
+            const r1 = this._resolvePoint(pt1);
+            x1 = r1.x;
+            y1 = pt1.price;
+            xloc = xloc || r1.xloc;
+
+            if (pt2 instanceof ChartPointObject) {
+                const r2 = this._resolvePoint(pt2);
+                x2 = r2.x;
+                y2 = pt2.price;
+            } else {
+                x2 = 0;
+                y2 = NaN;
+            }
+        } else {
+            // Resolve Series/function coordinate args to scalars at creation —
+            // mirrors box.new() (BoxHelper). Without this a bare-series arg like
+            // `line.new(x1 = bar_index, …)` stores the live series object, losing
+            // the creation-bar value (offset is always 0 → reads the last bar).
+            x1 = this._resolve(parsed.x1);
+            y1 = this._resolve(parsed.y1);
+            x2 = this._resolve(parsed.x2);
+            y2 = this._resolve(parsed.y2);
+        }
+
+        return this._createLine(
+            x1, y1, x2, y2, xloc, parsed.extend,
+            parsed.color, parsed.style, parsed.width, parsed.force_overlay,
+        );
+    }
+
+    // line() direct call — mapped via NAMESPACES_LIKE → line.any()
+    // Pine `line(arg)` is a type cast / typed-na, NOT a constructor.
+    any(...args: any[]): LineObject | null {
+        if (args.length === 1) {
+            const arg = args[0];
+            if (arg === null || arg === undefined) return null;
+            if (arg instanceof NAHelper) return null;
+            if (typeof arg === 'number' && isNaN(arg)) return null;
+            if (arg instanceof LineObject) return arg;
+            if (arg instanceof Series) {
+                const v = arg.get(0);
+                if (v === null || v === undefined || (typeof v === 'number' && isNaN(v))) return null;
+                if (v instanceof LineObject) return v;
+            }
+            return null;
+        }
+        return this.new(...args);
+    }
+
+    // --- Setter methods ---
+
+    @silentInSecondary
+    set_x1(id: LineObject, x: number): void {
+        if (id && !id._deleted) id.x1 = this._resolve(x);
+    }
+
+    @silentInSecondary
+    set_y1(id: LineObject, y: number): void {
+        if (id && !id._deleted) id.y1 = this._resolve(y);
+    }
+
+    @silentInSecondary
+    set_x2(id: LineObject, x: number): void {
+        if (id && !id._deleted) id.x2 = this._resolve(x);
+    }
+
+    @silentInSecondary
+    set_y2(id: LineObject, y: number): void {
+        if (id && !id._deleted) id.y2 = this._resolve(y);
+    }
+
+    @silentInSecondary
+    set_xy1(id: LineObject, x: number, y: number): void {
+        if (id && !id._deleted) {
+            id.x1 = this._resolve(x);
+            id.y1 = this._resolve(y);
+        }
+    }
+
+    @silentInSecondary
+    set_xy2(id: LineObject, x: number, y: number): void {
+        if (id && !id._deleted) {
+            id.x2 = this._resolve(x);
+            id.y2 = this._resolve(y);
+        }
+    }
+
+    @silentInSecondary
+    set_color(id: LineObject, color: string): void {
+        if (id && !id._deleted) id.color = this._resolveColor(color);
+    }
+
+    @silentInSecondary
+    set_width(id: LineObject, width: number): void {
+        if (id && !id._deleted) id.width = this._resolve(width) || 1;
+    }
+
+    @silentInSecondary
+    set_style(id: LineObject, style: string): void {
+        if (id && !id._deleted) id.style = this._resolve(style);
+    }
+
+    @silentInSecondary
+    set_extend(id: LineObject, extend: string): void {
+        if (id && !id._deleted) id.extend = this._resolve(extend);
+    }
+
+    @silentInSecondary
+    set_xloc(id: LineObject, x1: number, x2: number, xloc: string): void {
+        if (id && !id._deleted) {
+            id.x1 = x1;
+            id.x2 = x2;
+            id.xloc = xloc;
+        }
+    }
+
+    @silentInSecondary
+    set_first_point(id: LineObject, point: ChartPointObject): void {
+        if (id && !id._deleted && point) {
+            const r = this._resolvePoint(point);
+            id.x1 = r.x;
+            id.y1 = point.price;
+            id.xloc = r.xloc;
+        }
+    }
+
+    @silentInSecondary
+    set_second_point(id: LineObject, point: ChartPointObject): void {
+        if (id && !id._deleted && point) {
+            const r = this._resolvePoint(point);
+            id.x2 = r.x;
+            id.y2 = point.price;
+            id.xloc = r.xloc;
+        }
+    }
+
+    // --- Getter methods ---
+
+    get_x1(id: LineObject): number {
+        return id ? id.x1 : NaN;
+    }
+
+    get_y1(id: LineObject): number {
+        return id ? id.y1 : NaN;
+    }
+
+    get_x2(id: LineObject): number {
+        return id ? id.x2 : NaN;
+    }
+
+    get_y2(id: LineObject): number {
+        return id ? id.y2 : NaN;
+    }
+
+    // line.get_price(id, x) — returns price at bar index x along the line
+    get_price(id: LineObject, x: number): number {
+        if (!id || id._deleted) return NaN;
+        if (id.xloc !== 'bi') return NaN;
+        const dx = id.x2 - id.x1;
+        if (dx === 0) return id.y1;
+        // Linear interpolation/extrapolation (line treated as extend.both per Pine docs)
+        return id.y1 + ((x - id.x1) / dx) * (id.y2 - id.y1);
+    }
+
+    // --- Management methods ---
+
+    @silentInSecondary
+    copy(id: LineObject): LineObject | undefined {
+        if (!id) return undefined;
+        const ln = id.copy();
+        ln._helper = this;
+        ln._createdAtBar = this.context.idx;
+        this._lines.push(ln);
+        this._enforceMaxCount();
+        return ln;
+    }
+
+    @silentInSecondary
+    delete(id: LineObject): void {
+        if (id) id._deleted = true;
+    }
+
+    // --- Property: all active lines ---
+
+    get all(): LineObject[] {
+        return this._lines.filter((l) => !l._deleted);
+    }
+
+    /**
+     * Remove all drawing objects created at or after the given bar index.
+     * Called during streaming rollback to prevent accumulation.
+     */
+    rollbackFromBar(barIdx: number): void {
+        this._lines = this._lines.filter((l) => l._createdAtBar < barIdx);
+        this.syncToPlot();
+    }
+
+    // --- Style constants ---
+
+    get style_solid() {
+        return 'style_solid';
+    }
+    get style_dotted() {
+        return 'style_dotted';
+    }
+    get style_dashed() {
+        return 'style_dashed';
+    }
+    get style_arrow_left() {
+        return 'style_arrow_left';
+    }
+    get style_arrow_right() {
+        return 'style_arrow_right';
+    }
+    get style_arrow_both() {
+        return 'style_arrow_both';
+    }
+}

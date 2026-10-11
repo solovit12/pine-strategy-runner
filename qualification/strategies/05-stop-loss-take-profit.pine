@@ -1,0 +1,29 @@
+//@version=6
+strategy("Q05 Stop Loss and Take Profit", overlay=true, initial_capital=100000,
+     default_qty_type=strategy.fixed, default_qty_value=0.01,
+     pyramiding=1, commission_type=strategy.commission.percent,
+     commission_value=0.1, slippage=0, process_orders_on_close=false)
+
+int START_TIME = timestamp("UTC", 2026, 6, 1, 0, 0)
+int END_TIME = timestamp("UTC", 2026, 9, 1, 0, 0)
+bool inWindow = time >= START_TIME and time < END_TIME
+bool afterWindow = time >= END_TIME
+
+float fastSma = ta.sma(close, 10)
+float slowSma = ta.sma(close, 30)
+bool longSignal = ta.crossover(fastSma, slowSma)
+
+if inWindow and longSignal and strategy.position_size == 0
+    strategy.entry("Long", strategy.long)
+
+if inWindow and strategy.position_size > 0
+    float stopPrice = strategy.position_avg_price * 0.98
+    float limitPrice = strategy.position_avg_price * 1.04
+    strategy.exit("Bracket", from_entry="Long", stop=stopPrice, limit=limitPrice)
+
+if afterWindow and strategy.position_size != 0
+    strategy.close_all(comment="Window end")
+
+plot(fastSma, "SMA 10", color=color.blue)
+plot(slowSma, "SMA 30", color=color.orange)
+

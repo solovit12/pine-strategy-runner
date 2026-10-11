@@ -1,0 +1,201 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
+let _tableIdCounter = 0;
+
+export function resetTableIdCounter() {
+    _tableIdCounter = 0;
+}
+
+/**
+ * Pine truncates fractional "int" values at the point of use: since v6,
+ * `int / int` keeps the static type `int` but can carry a fractional value
+ * (e.g. `(i / 6) + 1` with a loop counter), and TradingView truncates it
+ * toward zero when it is consumed as a table coordinate. NaN (Pine `na`)
+ * stays NaN so the bounds checks below reject it as a silent no-op.
+ */
+export function truncCoord(v: number): number {
+    return Number.isFinite(v) ? Math.trunc(v) : NaN;
+}
+
+export interface TableCell {
+    text: string;
+    width: number;
+    height: number;
+    text_color: string;
+    text_halign: string;
+    text_valign: string;
+    text_size: string | number;
+    bgcolor: string;
+    tooltip: string;
+    text_font_family: string;
+    _merged: boolean;
+    _merge_parent: [number, number] | null; // [col, row] of the merge origin
+}
+
+export interface MergeRegion {
+    startCol: number;
+    startRow: number;
+    endCol: number;
+    endRow: number;
+}
+
+export class TableObject {
+    public id: number;
+    public position: string;
+    public columns: number;
+    public rows: number;
+    public bgcolor: string;
+    public frame_color: string;
+    public frame_width: number;
+    public border_color: string;
+    public border_width: number;
+    public force_overlay: boolean;
+    public _deleted: boolean;
+    public cells: (TableCell | null)[][];
+    public merges: MergeRegion[];
+    private _helper: any;
+
+    constructor(
+        position: string = 'top_right',
+        columns: number = 1,
+        rows: number = 1,
+        bgcolor: string = '',
+        frame_color: string = '',
+        frame_width: number = 0,
+        border_color: string = '',
+        border_width: number = 0,
+        force_overlay: boolean = false,
+    ) {
+        this.id = _tableIdCounter++;
+        this.position = position;
+        this.columns = truncCoord(columns);
+        this.rows = truncCoord(rows);
+        this.bgcolor = bgcolor;
+        this.frame_color = frame_color;
+        this.frame_width = frame_width;
+        this.border_color = border_color;
+        this.border_width = border_width;
+        this.force_overlay = force_overlay;
+        this._deleted = false;
+        this.merges = [];
+
+        // Initialize cells grid (rows × columns) with nulls
+        this.cells = [];
+        for (let r = 0; r < this.rows; r++) {
+            this.cells[r] = [];
+            for (let c = 0; c < this.columns; c++) {
+                this.cells[r][c] = null;
+            }
+        }
+    }
+
+    delete(): void {
+        this._deleted = true;
+    }
+
+    toPlotData(): any {
+        // Deep-copy cells to avoid exposing internal mutable state
+        const cellsCopy = this.cells.map(row =>
+            row.map(cell => cell ? { ...cell } : null)
+        );
+        return {
+            id: this.id,
+            position: this.position,
+            columns: this.columns,
+            rows: this.rows,
+            bgcolor: this.bgcolor,
+            frame_color: this.frame_color,
+            frame_width: this.frame_width,
+            border_color: this.border_color,
+            border_width: this.border_width,
+            force_overlay: this.force_overlay,
+            _deleted: this._deleted,
+            cells: cellsCopy,
+            merges: this.merges.map(m => ({ ...m })),
+        };
+    }
+
+    setCell(column: number, row: number, props: Partial<TableCell>): void {
+        column = truncCoord(column);
+        row = truncCoord(row);
+        if (!(row >= 0 && row < this.rows && column >= 0 && column < this.columns)) return;
+
+        const existing = this.cells[row][column];
+        if (existing && existing._merged && existing._merge_parent) {
+            // Redirect to merge parent (guard against self-reference to prevent infinite recursion)
+            const [pc, pr] = existing._merge_parent;
+            if (pc === column && pr === row) {
+                // Self-referencing merge parent — clear the flag and write directly
+                existing._merged = false;
+                existing._merge_parent = undefined;
+            } else {
+                this.setCell(pc, pr, props);
+                return;
+            }
+        }
+
+        const cell = existing || this._defaultCell();
+        Object.assign(cell, props);
+        this.cells[row][column] = cell;
+    }
+
+    getCell(column: number, row: number): TableCell | null {
+        column = truncCoord(column);
+        row = truncCoord(row);
+        if (!(row >= 0 && row < this.rows && column >= 0 && column < this.columns)) return null;
+        return this.cells[row][column];
+    }
+
+    clearCell(column: number, row: number): void {
+        column = truncCoord(column);
+        row = truncCoord(row);
+        if (!(row >= 0 && row < this.rows && column >= 0 && column < this.columns)) return;
+        this.cells[row][column] = null;
+    }
+
+    // ── Helper injection (mirrors PineArrayObject pattern) ──────
+    _setHelper(helper: any): void {
+        this._helper = helper;
+    }
+
+    // ── Pine Script method-call delegates ───────────────────────
+    // Enables tb.cell(...) syntax as sugar for table.cell(tb, ...)
+    cell(...args: any[]) { return this._helper.cell(this, ...args); }
+    clear(...args: any[]) { return this._helper.clear(this, ...args); }
+    merge_cells(...args: any[]) { return this._helper.merge_cells(this, ...args); }
+
+    cell_set_text(...args: any[]) { return this._helper.cell_set_text(this, ...args); }
+    cell_set_bgcolor(...args: any[]) { return this._helper.cell_set_bgcolor(this, ...args); }
+    cell_set_text_color(...args: any[]) { return this._helper.cell_set_text_color(this, ...args); }
+    cell_set_text_size(...args: any[]) { return this._helper.cell_set_text_size(this, ...args); }
+    cell_set_height(...args: any[]) { return this._helper.cell_set_height(this, ...args); }
+    cell_set_width(...args: any[]) { return this._helper.cell_set_width(this, ...args); }
+    cell_set_tooltip(...args: any[]) { return this._helper.cell_set_tooltip(this, ...args); }
+    cell_set_text_halign(...args: any[]) { return this._helper.cell_set_text_halign(this, ...args); }
+    cell_set_text_valign(...args: any[]) { return this._helper.cell_set_text_valign(this, ...args); }
+    cell_set_text_font_family(...args: any[]) { return this._helper.cell_set_text_font_family(this, ...args); }
+
+    set_position(...args: any[]) { return this._helper.set_position(this, ...args); }
+    set_bgcolor(...args: any[]) { return this._helper.set_bgcolor(this, ...args); }
+    set_border_color(...args: any[]) { return this._helper.set_border_color(this, ...args); }
+    set_border_width(...args: any[]) { return this._helper.set_border_width(this, ...args); }
+    set_frame_color(...args: any[]) { return this._helper.set_frame_color(this, ...args); }
+    set_frame_width(...args: any[]) { return this._helper.set_frame_width(this, ...args); }
+
+    private _defaultCell(): TableCell {
+        return {
+            text: '',
+            width: 0,
+            height: 0,
+            text_color: '#000000',
+            text_halign: 'center',
+            text_valign: 'center',
+            text_size: 'normal',
+            bgcolor: '',
+            tooltip: '',
+            text_font_family: 'default',
+            _merged: false,
+            _merge_parent: null,
+        };
+    }
+}

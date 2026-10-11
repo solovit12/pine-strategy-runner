@@ -1,0 +1,66 @@
+// SPDX-License-Identifier: AGPL-3.0-only
+
+import { ChartPointObject } from '../chart/ChartPointObject';
+
+let _polylineIdCounter = 0;
+
+export function resetPolylineIdCounter() {
+    _polylineIdCounter = 0;
+}
+
+export class PolylineObject {
+    public id: number;
+    public points: ChartPointObject[];
+    public curved: boolean;
+    public closed: boolean;
+    public xloc: string;
+    public line_color: any;
+    public fill_color: any;
+    public line_style: string;
+    public line_width: number;
+    public force_overlay: boolean;
+    public _deleted: boolean;
+    /** Bar index at which this object was created (for streaming rollback) */
+    public _createdAtBar: number = -1;
+
+    constructor(
+        points: ChartPointObject[],
+        curved: boolean = false,
+        closed: boolean = false,
+        xloc: string = 'bi',
+        line_color: any = '#2962ff',
+        fill_color: any = '',
+        line_style: string = 'style_solid',
+        line_width: number = 1,
+        force_overlay: boolean = false,
+    ) {
+        this.id = _polylineIdCounter++;
+        this.points = points;
+        this.curved = curved;
+        this.closed = closed;
+        this.xloc = xloc;
+        this.line_color = line_color;
+        this.fill_color = fill_color;
+        this.line_style = line_style;
+        this.line_width = line_width;
+        this.force_overlay = force_overlay;
+        this._deleted = false;
+    }
+
+    delete(): void {
+        this._deleted = true;
+    }
+
+    toPlotData(): any {
+        return {
+            id: this.id,
+            points: this.points.map(pt => ({
+                time: pt.time, index: pt.index, price: pt.price,
+            })),
+            curved: this.curved, closed: this.closed, xloc: this.xloc,
+            line_color: this.line_color, fill_color: this.fill_color,
+            line_style: this.line_style, line_width: this.line_width,
+            force_overlay: this.force_overlay, _deleted: this._deleted,
+        };
+    }
+}

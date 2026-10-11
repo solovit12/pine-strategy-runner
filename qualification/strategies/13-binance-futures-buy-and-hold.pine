@@ -1,0 +1,17 @@
+//@version=6
+strategy("BN01 Binance Futures Buy and Hold", overlay=true, initial_capital=100000,
+     default_qty_type=strategy.fixed, default_qty_value=0.01,
+     pyramiding=1, process_orders_on_close=false)
+
+// The service requires an explicit user-entered fee and applies it to all fills.
+int START_TIME = timestamp("UTC", 2026, 9, 1, 0, 0)
+int END_TIME = timestamp("UTC", 2026, 9, 7, 0, 0)
+bool inWindow = time >= START_TIME and time < END_TIME
+bool afterWindow = time >= END_TIME
+
+var bool submitted = false
+if inWindow and not submitted
+    strategy.entry("Long", strategy.long)
+    submitted := true
+if afterWindow and strategy.position_size != 0
+    strategy.close_all(comment="Window end")

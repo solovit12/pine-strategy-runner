@@ -1,0 +1,20 @@
+name: pine-strategy-runner
+
+# Start:  docker compose up -d        then open http://127.0.0.1:18788
+# Update: docker compose pull && docker compose up -d
+services:
+  psr:
+    image: ghcr.io/solovit12/pine-strategy-runner:latest
+    ports:
+      - "127.0.0.1:18788:8787"
+    volumes:
+      - psr-data:/data
+    init: true
+    restart: unless-stopped
+    # A stop closes every Paper run cleanly; their virtual accounts stay in the history.
+    stop_grace_period: 90s
+    security_opt:
+      - no-new-privileges:true
+
+volumes:
+  psr-data:

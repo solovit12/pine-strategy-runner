@@ -1,0 +1,492 @@
+--- a/crates/adapters/hyperliquid/src/data.rs
++++ b/crates/adapters/hyperliquid/src/data.rs
+@@ -944,10 +944,11 @@
+         let ws = self.ws_client.clone();
+         let instrument_id = subscription.instrument_id;
+         let (n_sig_figs, mantissa) = parse_book_precision_params(subscription.params.as_ref())?;
++        let fast = parse_book_fast_param(subscription.params.as_ref())?;
+         self.register_stream_health(MarketDataChannel::Deltas, instrument_id);
+ 
+         self.spawn_task("subscribe_book_deltas", async move {
+-            ws.subscribe_book_with_options(instrument_id, n_sig_figs, mantissa)
++            ws.subscribe_book_with_fast_options(instrument_id, n_sig_figs, mantissa, fast)
+                 .await
+         });
+ 
+@@ -2312,6 +2313,17 @@
+     Ok((read_u32("n_sig_figs")?, read_u32("mantissa")?))
+ }
+ 
++// Keep absence distinct from explicit false so the original wire shape is unchanged.
++fn parse_book_fast_param(params: Option<&Params>) -> anyhow::Result<Option<bool>> {
++    match params.and_then(|params| params.get("fast")) {
++        None => Ok(None),
++        Some(value) => value
++            .as_bool()
++            .map(Some)
++            .ok_or_else(|| anyhow::anyhow!("`fast` must be a boolean")),
++    }
++}
++
+ // Hyperliquid funds perpetuals hourly, so `interval` is fixed at 60 mins;
+ // `time` from the venue marks the end of the funding interval in ms.
+ pub(crate) fn funding_entry_to_update(
+@@ -2959,6 +2971,34 @@
+         assert_eq!(m, None);
+     }
+ 
++    #[rstest]
++    fn test_parse_book_fast_param_missing() {
++        assert_eq!(parse_book_fast_param(None).unwrap(), None);
++        assert_eq!(parse_book_fast_param(Some(&Params::new())).unwrap(), None);
++    }
++
++    #[rstest]
++    #[case(true)]
++    #[case(false)]
++    fn test_parse_book_fast_param_boolean(#[case] fast: bool) {
++        let params = make_params(serde_json::json!({"fast": fast}));
++        assert_eq!(parse_book_fast_param(Some(&params)).unwrap(), Some(fast));
++    }
++
++    #[rstest]
++    #[case(serde_json::json!("true"))]
++    #[case(serde_json::json!(1))]
++    #[case(serde_json::Value::Null)]
++    fn test_parse_book_fast_param_rejects_non_boolean(#[case] value: serde_json::Value) {
++        let params = make_params(serde_json::json!({"fast": value}));
++        assert!(
++            parse_book_fast_param(Some(&params))
++                .unwrap_err()
++                .to_string()
++                .contains("fast")
++        );
++    }
++
+     fn make_params(json: serde_json::Value) -> Params {
+         serde_json::from_value(json).expect("valid params payload")
+     }
+--- a/crates/adapters/hyperliquid/src/python/mod.rs
++++ b/crates/adapters/hyperliquid/src/python/mod.rs
+@@ -205,10 +205,17 @@
+     }
+ }
+ 
++/// Native support for the optional fast five-level public book subscription.
++pub const HYPERLIQUID_FAST_BOOK_SUPPORTED: bool = true;
++
+ /// Exposed through `nautilus_trader.adapters.hyperliquid`.
+ #[pymodule]
+ pub fn hyperliquid(m: &Bound<'_, PyModule>) -> PyResult<()> {
+     m.add(stringify!(HYPERLIQUID), HYPERLIQUID)?;
++    m.add(
++        stringify!(HYPERLIQUID_FAST_BOOK_SUPPORTED),
++        HYPERLIQUID_FAST_BOOK_SUPPORTED,
++    )?;
+     m.add(stringify!(HYPERLIQUID_CLIENT_ID), *HYPERLIQUID_CLIENT_ID)?;
+     m.add(stringify!(HYPERLIQUID_VENUE), *HYPERLIQUID_VENUE)?;
+     m.add_class::<HyperliquidHttpClient>()?;
+--- a/crates/adapters/hyperliquid/src/websocket/book.rs
++++ b/crates/adapters/hyperliquid/src/websocket/book.rs
+@@ -41,6 +41,7 @@
+ pub(crate) struct BookStreamOptions {
+     pub n_sig_figs: Option<u32>,
+     pub mantissa: Option<u32>,
++    pub fast: Option<bool>,
+ }
+ 
+ /// Outcome of registering a logical use: whether a venue subscribe should be
+@@ -161,7 +162,31 @@
+         BookStreamOptions {
+             n_sig_figs,
+             mantissa,
++            fast: None,
+         }
++    }
++
++    #[rstest]
++    fn fast_option_survives_shared_use_and_final_release() {
++        let registry = BookStreamRegistry::default();
++        let coin = Ustr::from("HYPE");
++        let fast_options = BookStreamOptions {
++            fast: Some(true),
++            ..Default::default()
++        };
++        registry.register(coin, BookStreamUse::Deltas, fast_options);
++        let shared = registry.register(coin, BookStreamUse::Depth, BookStreamOptions::default());
++        assert!(!shared.subscribe);
++        assert!(shared.options_mismatch);
++        assert_eq!(registry.options(&coin), Some(fast_options));
++        assert_eq!(
++            registry.release(&coin, BookStreamUse::Depth),
++            BookStreamRelease::Retained
++        );
++        assert_eq!(
++            registry.release(&coin, BookStreamUse::Deltas),
++            BookStreamRelease::Unsubscribe(fast_options)
++        );
+     }
+ 
+     #[rstest]
+--- a/crates/adapters/hyperliquid/src/websocket/client.rs
++++ b/crates/adapters/hyperliquid/src/websocket/client.rs
+@@ -441,11 +441,13 @@
+                                 coin,
+                                 n_sig_figs,
+                                 mantissa,
++                                fast,
+                             } = &mut subscription
+                                 && let Some(options) = book_streams.options(coin)
+                             {
+                                 *n_sig_figs = options.n_sig_figs;
+                                 *mantissa = options.mantissa;
++                                *fast = options.fast;
+                             }
+ 
+                             if let Err(e) = cmd_tx_for_reconnect.send(HandlerCommand::Subscribe {
+@@ -1422,6 +1424,21 @@
+         n_sig_figs: Option<u32>,
+         mantissa: Option<u32>,
+     ) -> anyhow::Result<()> {
++        self.subscribe_book_with_fast_options(instrument_id, n_sig_figs, mantissa, None)
++            .await
++    }
++
++    /// Subscribe to L2 deltas with an optional venue fast five-level book.
++    ///
++    /// Absent `fast` preserves the venue default. The first shared book use
++    /// owns all options, including those replayed on reconnect and unsubscribe.
++    pub async fn subscribe_book_with_fast_options(
++        &self,
++        instrument_id: InstrumentId,
++        n_sig_figs: Option<u32>,
++        mantissa: Option<u32>,
++        fast: Option<bool>,
++    ) -> anyhow::Result<()> {
+         let instrument = self
+             .get_instrument(&instrument_id)
+             .ok_or_else(|| InstrumentLookupError::not_found(instrument_id))?;
+@@ -1434,7 +1451,14 @@
+             .send(HandlerCommand::UpdateInstrument(instrument.clone()))
+             .map_err(|e| anyhow::anyhow!("Failed to send UpdateInstrument command: {e}"))?;
+ 
+-        self.send_book_stream_subscribe(&cmd_tx, coin, BookStreamUse::Deltas, n_sig_figs, mantissa)
++        self.send_book_stream_subscribe(
++            &cmd_tx,
++            coin,
++            BookStreamUse::Deltas,
++            n_sig_figs,
++            mantissa,
++            fast,
++        )
+     }
+ 
+     /// Subscribe to order book depth-10 snapshots.
+@@ -1477,7 +1501,14 @@
+             })
+             .map_err(|e| anyhow::anyhow!("Failed to send SetDepthSub command: {e}"))?;
+ 
+-        self.send_book_stream_subscribe(&cmd_tx, coin, BookStreamUse::Depth, n_sig_figs, mantissa)
++        self.send_book_stream_subscribe(
++            &cmd_tx,
++            coin,
++            BookStreamUse::Depth,
++            n_sig_figs,
++            mantissa,
++            None,
++        )
+     }
+ 
+     /// Unsubscribe from order book depth-10 snapshots.
+@@ -1816,6 +1847,7 @@
+             coin,
+             mantissa: options.mantissa,
+             n_sig_figs: options.n_sig_figs,
++            fast: options.fast,
+         };
+ 
+         self.send_stream_resubscribe(&cmd_tx, subscription)
+@@ -1828,6 +1860,7 @@
+         stream_use: BookStreamUse,
+         n_sig_figs: Option<u32>,
+         mantissa: Option<u32>,
++        fast: Option<bool>,
+     ) -> anyhow::Result<()> {
+         let registration = self.book_streams.register(
+             coin,
+@@ -1835,12 +1868,13 @@
+             BookStreamOptions {
+                 n_sig_figs,
+                 mantissa,
++                fast,
+             },
+         );
+ 
+         if registration.options_mismatch {
+             log::warn!(
+-                "Requested l2Book options for {coin} (n_sig_figs={n_sig_figs:?}, mantissa={mantissa:?}) \
++                "Requested l2Book options for {coin} (n_sig_figs={n_sig_figs:?}, mantissa={mantissa:?}, fast={fast:?}) \
+                 differ from the active stream ({:?}), keeping active options",
+                 registration.options,
+             );
+@@ -1851,6 +1885,7 @@
+                 coin,
+                 mantissa: registration.options.mantissa,
+                 n_sig_figs: registration.options.n_sig_figs,
++                fast: registration.options.fast,
+             };
+ 
+             if let Err(e) = self.send_subscription(cmd_tx, subscription) {
+@@ -1873,6 +1908,7 @@
+                     coin,
+                     mantissa: options.mantissa,
+                     n_sig_figs: options.n_sig_figs,
++                    fast: options.fast,
+                 };
+ 
+                 self.send_unsubscription(cmd_tx, subscription)?;
+@@ -2453,6 +2489,7 @@
+             coin: Ustr::from(rest.context("Missing coin")?),
+             mantissa: None,
+             n_sig_figs: None,
++            fast: None,
+         }),
+         HyperliquidWsChannel::Trades => Ok(SubscriptionRequest::Trades {
+             coin: Ustr::from(rest.context("Missing coin")?),
+@@ -2628,7 +2665,7 @@
+     #[case(SubscriptionRequest::Candle { coin: "SOL".into(), interval: HyperliquidBarInterval::OneHour })]
+     #[case(SubscriptionRequest::OrderUpdates { user: "0x123".to_string() })]
+     #[case(SubscriptionRequest::Trades { coin: "vntls:vCURSOR".into() })]
+-    #[case(SubscriptionRequest::L2Book { coin: "vntls:vCURSOR".into(), mantissa: None, n_sig_figs: None })]
++    #[case(SubscriptionRequest::L2Book { coin: "vntls:vCURSOR".into(), mantissa: None, n_sig_figs: None, fast: None })]
+     #[case(SubscriptionRequest::Candle { coin: "vntls:vCURSOR".into(), interval: HyperliquidBarInterval::OneHour })]
+     fn test_subscription_reconstruction(#[case] subscription: SubscriptionRequest) {
+         let topic = subscription_topic(&subscription);
+--- a/crates/adapters/hyperliquid/src/websocket/messages.rs
++++ b/crates/adapters/hyperliquid/src/websocket/messages.rs
+@@ -99,6 +99,8 @@
+         n_sig_figs: Option<u32>,
+         #[serde(skip_serializing_if = "Option::is_none")]
+         mantissa: Option<u32>,
++        #[serde(skip_serializing_if = "Option::is_none")]
++        fast: Option<bool>,
+     },
+     /// Trade updates.
+     Trades { coin: Ustr },
+@@ -954,11 +956,29 @@
+             coin: Ustr::from("BTC"),
+             n_sig_figs: Some(5),
+             mantissa: None,
++            fast: None,
+         };
+ 
+         let json = serde_json::to_string(&sub).unwrap();
+         assert!(json.contains(r#""type":"l2Book""#));
+         assert!(json.contains(r#""coin":"BTC""#));
++    }
++
++    #[rstest]
++    #[case(None, serde_json::json!({"type": "l2Book", "coin": "HYPE"}))]
++    #[case(Some(true), serde_json::json!({"type": "l2Book", "coin": "HYPE", "fast": true}))]
++    #[case(Some(false), serde_json::json!({"type": "l2Book", "coin": "HYPE", "fast": false}))]
++    fn test_l2_book_fast_serialization(
++        #[case] fast: Option<bool>,
++        #[case] expected: serde_json::Value,
++    ) {
++        let subscription = SubscriptionRequest::L2Book {
++            coin: Ustr::from("HYPE"),
++            n_sig_figs: None,
++            mantissa: None,
++            fast,
++        };
++        assert_eq!(serde_json::to_value(subscription).unwrap(), expected);
+     }
+ 
+     #[rstest]
+--- a/crates/adapters/hyperliquid/src/websocket/parse.rs
++++ b/crates/adapters/hyperliquid/src/websocket/parse.rs
+@@ -630,8 +630,10 @@
+     use std::str::FromStr;
+ 
+     use nautilus_model::{
++        enums::BookType,
+         identifiers::{InstrumentId, Symbol},
+         instruments::CryptoPerpetual,
++        orderbook::OrderBook,
+         types::currency::Currency,
+     };
+     use rstest::rstest;
+@@ -964,6 +966,40 @@
+         assert_eq!(ask_delta.order.side, OrderSide::Sell.into());
+         assert!(ask_delta.order.size.is_positive());
+         assert_eq!(ask_delta.order.order_id, 0);
++    }
++
++    #[rstest]
++    fn test_fast_book_snapshots_replace_all_previous_levels() {
++        let instrument = create_test_instrument();
++        let mut cached = OrderBook::new(instrument.id(), BookType::L2_MBP);
++        for (count, bid, ask, timestamp) in [
++            (5, 100, 101, 1_700_000_000_000_u64),
++            (2, 90, 111, 1_700_000_000_100_u64),
++        ] {
++            let bids: Vec<_> = (0..count).map(|offset| serde_json::json!({"px": (bid - offset).to_string(), "sz": "1", "n": 1})).collect();
++            let asks: Vec<_> = (0..count).map(|offset| serde_json::json!({"px": (ask + offset).to_string(), "sz": "2", "n": 1})).collect();
++            let wire: WsBookData = serde_json::from_value(
++                serde_json::json!({"coin": "BTC", "time": timestamp, "levels": [bids, asks]}),
++            )
++            .unwrap();
++            let deltas = parse_ws_order_book_deltas(
++                &wire,
++                &instrument,
++                UnixNanos::from(timestamp * 1_000_000),
++            )
++            .unwrap();
++            assert_eq!(deltas.deltas[0].action, BookAction::Clear);
++            assert_ne!(deltas.deltas[0].flags & RecordFlag::F_SNAPSHOT as u8, 0);
++            assert_ne!(
++                deltas.deltas.last().unwrap().flags & RecordFlag::F_LAST as u8,
++                0
++            );
++            cached.apply_deltas(&deltas).unwrap();
++            assert_eq!(cached.bids(None).count(), count as usize);
++            assert_eq!(cached.asks(None).count(), count as usize);
++        }
++        assert_eq!(cached.best_bid_price(), Some(Price::from("90.00")));
++        assert_eq!(cached.best_ask_price(), Some(Price::from("111.00")));
+     }
+ 
+     #[rstest]
+--- a/crates/adapters/hyperliquid/tests/integration/websocket.rs
++++ b/crates/adapters/hyperliquid/tests/integration/websocket.rs
+@@ -1720,8 +1720,11 @@
+ }
+ 
+ #[rstest]
+-#[tokio::test]
+-async fn test_book_precision_options_survive_reconnection() {
++#[case(None)]
++#[case(Some(true))]
++#[case(Some(false))]
++#[tokio::test]
++async fn test_book_precision_options_survive_reconnection(#[case] fast: Option<bool>) {
+     let state = Arc::new(TestServerState::default());
+     state.drop_next_connection.store(true, Ordering::Relaxed);
+ 
+@@ -1735,10 +1738,11 @@
+         .expect("client inactive");
+ 
+     client
+-        .subscribe_book_with_options(
++        .subscribe_book_with_fast_options(
+             InstrumentId::from("BTC-USD-PERP.HYPERLIQUID"),
+             Some(5),
+             Some(2),
++            fast,
+         )
+         .await
+         .expect("subscribe failed");
+@@ -1767,6 +1771,7 @@
+     );
+ 
+     for (_, sub) in &book_subs {
++        assert_eq!(sub.get("fast").and_then(Value::as_bool), fast);
+         assert_eq!(
+             sub.get("nSigFigs").and_then(Value::as_u64),
+             Some(5),
+@@ -2073,8 +2078,11 @@
+ }
+ 
+ #[rstest]
+-#[tokio::test]
+-async fn test_resubscribe_book_echoes_original_options() {
++#[case(None)]
++#[case(Some(true))]
++#[case(Some(false))]
++#[tokio::test]
++async fn test_resubscribe_book_echoes_original_options(#[case] fast: Option<bool>) {
+     let state = Arc::new(TestServerState::default());
+     let addr = start_ws_server(state.clone()).await;
+     let ws_url = format!("ws://{addr}/ws");
+@@ -2087,7 +2095,7 @@
+ 
+     let instrument_id = InstrumentId::from("BTC-USD-PERP.HYPERLIQUID");
+     client
+-        .subscribe_book_with_options(instrument_id, Some(5), Some(2))
++        .subscribe_book_with_fast_options(instrument_id, Some(5), Some(2), fast)
+         .await
+         .expect("subscribe failed");
+ 
+@@ -2123,6 +2131,10 @@
+ 
+     let unsubscriptions = state.unsubscriptions.lock().await;
+     assert_eq!(unsubscriptions.len(), 1);
++    assert_eq!(
++        unsubscriptions[0].get("fast").and_then(Value::as_bool),
++        fast
++    );
+     assert_eq!(
+         unsubscriptions[0].get("type").and_then(Value::as_str),
+         Some("l2Book"),
+@@ -2145,6 +2157,7 @@
+         .find(|(t, _)| t == "l2Book")
+         .expect("resubscribed stream")
+         .clone();
++    assert_eq!(resubscribed.get("fast").and_then(Value::as_bool), fast);
+     assert_eq!(
+         resubscribed.get("nSigFigs").and_then(Value::as_u64),
+         Some(5),
+@@ -2171,6 +2184,10 @@
+     .await;
+ 
+     let unsubscriptions = state.unsubscriptions.lock().await;
++    assert_eq!(
++        unsubscriptions[1].get("fast").and_then(Value::as_bool),
++        fast
++    );
+     assert_eq!(
+         unsubscriptions[1].get("nSigFigs").and_then(Value::as_u64),
+         Some(5),
+--- a/python/nautilus_trader/adapters/hyperliquid/__init__.py
++++ b/python/nautilus_trader/adapters/hyperliquid/__init__.py
+@@ -23,6 +23,7 @@
+ __all__ = [
+     "HYPERLIQUID",
+     "HYPERLIQUID_CLIENT_ID",
++    "HYPERLIQUID_FAST_BOOK_SUPPORTED",
+     "HYPERLIQUID_VENUE",
+     "HyperliquidAllDexsAssetCtxs",
+     "HyperliquidAllMids",
+--- a/python/nautilus_trader/adapters/hyperliquid/__init__.pyi
++++ b/python/nautilus_trader/adapters/hyperliquid/__init__.pyi
+@@ -12,6 +12,7 @@
+ __all__ = [
+     "HYPERLIQUID",
+     "HYPERLIQUID_CLIENT_ID",
++    "HYPERLIQUID_FAST_BOOK_SUPPORTED",
+     "HYPERLIQUID_VENUE",
+     "HyperliquidAllDexsAssetCtxs",
+     "HyperliquidAllMids",
+@@ -26,6 +27,12 @@
+     "HyperliquidTwapHistory",
+     "HyperliquidTwapSliceFill",
+ ]
++
++HYPERLIQUID: str
++HYPERLIQUID_FAST_BOOK_SUPPORTED: bool
++HYPERLIQUID_CLIENT_ID: model.ClientId
++HYPERLIQUID_VENUE: model.Venue
++
+ 
+ HYPERLIQUID: str
+ HYPERLIQUID_CLIENT_ID: model.ClientId
+--- a/python/pyproject.toml
++++ b/python/pyproject.toml
+@@ -1,6 +1,6 @@
+ [project]
+ name = "nautilus-trader"
+-version = "2.0.0rc6"
++version = "2.0.0rc6.dev20260929+hlfast5.1"
+ description = "Production-grade Rust-native trading engine with deterministic event-driven architecture"
+ authors = [{ name = "Nautech Systems", email = "info@nautechsystems.io" }]
+ classifiers = [

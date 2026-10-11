@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.env
+.env.*
+!.env.example
+*.log
+.DS_Store
+coverage/
+var/intrabar-cache/
+.local/
+undefined/
+
+CLAUDE.local.md
+*.command
+HANDOFF_FOR_CLAUDE_CODE.md

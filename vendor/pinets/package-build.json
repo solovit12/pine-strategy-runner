@@ -1,0 +1,111 @@
+{
+    "name": "pinets",
+    "version": "0.9.33-pine-strategy-runner.h4.1",
+    "description": "Run Pine Script anywhere. PineTS is an open-source transpiler and runtime that brings Pine Script logic to Node.js and the browser with 1:1 syntax compatibility. Reliably write, port, and run indicators or strategies on your own infrastructure.",
+    "keywords": [
+        "Pine Script",
+        "Pine",
+        "PineScript transpiler",
+        "PineScript runtime",
+        "PineScript to JavaScript",
+        "PineScript to TypeScript",
+        "TradingView",
+        "Quant",
+        "Quantitative Finance",
+        "Trading",
+        "Technical Analysis",
+        "TA",
+        "Indicator",
+        "Strategy",
+        "Backtesting",
+        "Forecasting",
+        "Machine Learning",
+        "Data Science",
+        "Data Analysis",
+        "Data Visualization",
+        "Data Mining"
+    ],
+    "main": "dist/pinets.min.cjs",
+    "module": "dist/pinets.min.es.js",
+    "browser": "dist/pinets.min.browser.es.js",
+    "types": "dist/types/index.d.ts",
+    "exports": {
+        ".": {
+            "types": "./dist/types/index.d.ts",
+            "node": {
+                "import": "./dist/pinets.min.es.js",
+                "require": "./dist/pinets.min.cjs"
+            },
+            "browser": {
+                "import": "./dist/pinets.min.browser.es.js",
+                "default": "./dist/pinets.min.browser.js"
+            },
+            "default": "./dist/pinets.min.es.js"
+        }
+    },
+    "files": [
+        "dist/*.min.*",
+        "dist/types"
+    ],
+    "type": "module",
+    "scripts": {
+        "test": "cross-env TEST_ENV=true vitest --reporter verbose",
+        "test:coverage": "cross-env TEST_ENV=true vitest run --coverage",
+        "test:coverage:badge": "cross-env TEST_ENV=true vitest run --coverage --exclude tests/_local/**",
+        "generate:badges": "npm run test:coverage:badge && node scripts/generate-badges.js",
+        "generate:ta-index": "node scripts/generate-ta-index.js",
+        "generate:math-index": "node scripts/generate-math-index.js",
+        "generate:array-index": "node scripts/generate-array-index.js",
+        "generate:input-index": "node scripts/generate-input-index.js",
+        "generate:request-index": "node scripts/generate-request-index.js",
+        "generate:map-index": "node scripts/generate-map-index.js",
+        "generate:matrix-index": "node scripts/generate-matrix-index.js",
+        "build:dev:all": "npm run generate:ta-index && npm run generate:math-index && npm run generate:array-index && npm run generate:input-index && npm run generate:request-index && npm run generate:map-index && npm run generate:matrix-index && npm run build:dev:browser && npm run build:dev:cjs && npm run build:dev:es && npm run build:dev:browser-es && tsc --emitDeclarationOnly --declaration --outDir dist/types -p tsconfig.dts.json",
+        "build:dev:cjs": "cross-env BUILD=dev FORMAT=cjs rollup -c ./rollup.config.js",
+        "build:dev:browser": "cross-env BUILD=dev FORMAT=browser rollup -c ./rollup.config.js",
+        "build:dev:browser-es": "cross-env BUILD=dev FORMAT=browser-es rollup -c ./rollup.config.js",
+        "build:dev:es": "cross-env BUILD=dev rollup -c ./rollup.config.js",
+        "build:prod:all": "npm run generate:ta-index && npm run generate:math-index && npm run generate:array-index && npm run generate:input-index && npm run generate:request-index && npm run generate:map-index && npm run generate:matrix-index && npm run build:prod:browser && npm run build:prod:cjs && npm run build:prod:es && npm run build:prod:browser-es && tsc --emitDeclarationOnly --declaration --outDir dist/types -p tsconfig.dts.json",
+        "build:prod:cjs": "cross-env BUILD=prod FORMAT=cjs rollup -c ./rollup.config.js",
+        "build:prod:browser": "cross-env BUILD=prod FORMAT=browser rollup -c ./rollup.config.js",
+        "build:prod:browser-es": "cross-env BUILD=prod FORMAT=browser-es rollup -c ./rollup.config.js",
+        "build:prod:es": "cross-env BUILD=prod rollup -c ./rollup.config.js",
+        "prepublishOnly": "npm run build:prod:all",
+        "knip": "knip"
+    },
+    "author": "LuxAlgo",
+    "license": "AGPL-3.0-only",
+    "dependencies": {
+        "acorn": "^8.14.0",
+        "acorn-walk": "^8.3.4",
+        "astring": "^1.9.0"
+    },
+    "devDependencies": {
+        "@rollup/plugin-commonjs": "^29.0.0",
+        "@rollup/plugin-json": "^6.1.0",
+        "@rollup/plugin-node-resolve": "^16.0.3",
+        "@types/react": "^19.2.10",
+        "@types/react-dom": "^19.2.3",
+        "@vitejs/plugin-react": "^5.1.2",
+        "@vitest/coverage-v8": "^4.1.0",
+        "autoprefixer": "^10.4.23",
+        "badgen": "^3.2.3",
+        "cross-env": "^7.0.3",
+        "knip": "^5.43.6",
+        "postcss": "^8.5.6",
+        "rollup-plugin-esbuild": "^6.2.1",
+        "rollup-plugin-sourcemaps": "^0.6.3",
+        "rollup-plugin-typescript-paths": "^1.5.0",
+        "tailwindcss": "^4.1.18",
+        "tsx": "^4.21.0",
+        "typescript": "~5.9.3",
+        "vite": "^7.3.1",
+        "vite-tsconfig-paths": "^4.3.2",
+        "vitest": "^4.1.0"
+    },
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/LuxAlgo/PineTS.git"
+    },
+    "homepage": "https://luxalgo.com/"
+}

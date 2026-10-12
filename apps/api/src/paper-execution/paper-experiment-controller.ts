@@ -1,3 +1,4 @@
+import { pineCodeError } from '../../../../packages/pine-runtime/src/pine-errors.js';
 import {
   MAX_CONCURRENT_PAPER_EXPERIMENTS,
   type PaperExperimentCapabilities,
@@ -200,6 +201,9 @@ export class PaperExperimentControllerV1 {
         request.settings.tracks.map(({ market }) => market))
       : null;
     if (nativeRefusal) throw new PaperExperimentControllerError('UNSUPPORTED_STRATEGY', nativeRefusal);
+    // A mistake in the Pine code is explained before an engine is started for it.
+    const codeError = savedModel === 'pine_live_v1' ? pineCodeError(saved.version.source) : null;
+    if (codeError) throw new PaperExperimentControllerError('UNSUPPORTED_STRATEGY', codeError.message);
     if (!this.#store || !this.#factory) {
       throw new PaperExperimentControllerError('PAPER_UNAVAILABLE', this.capabilities().reason ?? UNAVAILABLE_REASON);
     }

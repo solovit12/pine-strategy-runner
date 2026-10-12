@@ -15,6 +15,7 @@ import {
   runBacktest, saveStrategyVersion, type ServerHealth,
 } from './lib/api';
 import { backtestDateWindowError, inclusiveUtcDays } from './lib/backtest-date-window';
+import { readEditorDraft, writeEditorDraft, type EditorDraft } from './lib/editor-draft';
 import { backtestResultAfter } from './lib/run-result-state';
 import { backtestSettingsSupportedByEditor } from './lib/strategy-editor-compat';
 import { registerBacktestWebTools } from './lib/webmcp';
@@ -192,6 +193,8 @@ export function App() {
   const openButtonRef = useRef<HTMLButtonElement | null>(null);
   const saveButtonRef = useRef<HTMLButtonElement | null>(null);
   const declarationRef = useRef<StrategyDeclarationProperties>({});
+  /** Set once the saved draft (if any) is back in the form; saving starts only then. */
+  const draftRestored = useRef(false);
 
   /** Loaded code keeps its saved properties; only later edits to strategy(...) update the form. */
   const setLoadedSource = (text: string) => {
@@ -225,12 +228,27 @@ export function App() {
       setPyramiding(loaded.configuration.pyramiding);
       setSlippageTicks(loaded.configuration.slippageTicks);
       setProcessOrdersOnClose(strategyDeclarationProperties(loaded.source).processOrdersOnClose ?? false);
+      const draft = readEditorDraft();
+      if (draft) restoreEditorDraft(draft, loaded.source);
+      draftRestored.current = true;
       setState('ready');
     }).catch((reason: Error) => {
       setError(reason.message);
       setState('error');
     });
   }, []);
+
+  // Unsaved work survives a page reload (this browser only).
+  useEffect(() => {
+    if (!draftRestored.current) return;
+    const timer = window.setTimeout(() => writeEditorDraft({
+      source, symbol, timeframe, startDate, endDate, initialCapital, defaultOrderSizeValue, defaultOrderSizeType,
+      pyramiding, commissionValueInput, longLeverage, shortLeverage, slippageTicks, processOrdersOnClose, strategyName,
+      strategyId: loadedStrategy?.strategy.id ?? null,
+    }), 300);
+    return () => window.clearTimeout(timer);
+  }, [source, symbol, timeframe, startDate, endDate, initialCapital, defaultOrderSizeValue, defaultOrderSizeType, pyramiding,
+    commissionValueInput, longLeverage, shortLeverage, slippageTicks, processOrdersOnClose, strategyName, loadedStrategy, state]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -437,6 +455,36 @@ export function App() {
     setLastBacktestedRequest(null);
     setError('');
     setState('ready');
+  };
+
+  /** Puts the draft saved before a reload back into the form, over the template. */
+  const restoreEditorDraft = (draft: EditorDraft, templateSource: string) => {
+    setLoadedSource(draft.source);
+    setSymbol(draft.symbol);
+    setTimeframe(timeframeOptions.includes(draft.timeframe) ? draft.timeframe : '1h');
+    setStartDate(draft.startDate);
+    setEndDate(draft.endDate);
+    setInitialCapital(draft.initialCapital);
+    setDefaultOrderSizeValue(draft.defaultOrderSizeValue);
+    setDefaultOrderSizeType(draft.defaultOrderSizeType);
+    setPyramiding(draft.pyramiding);
+    setCommissionValueInput(draft.commissionValueInput);
+    setLongLeverage(draft.longLeverage);
+    setShortLeverage(draft.shortLeverage);
+    setSlippageTicks(draft.slippageTicks);
+    setProcessOrdersOnClose(draft.processOrdersOnClose);
+    setStrategyName(draft.strategyName);
+    if (draft.source !== templateSource) setCatalogMessage('The editor was restored from your last visit.');
+    if (!draft.strategyId) return;
+    // Still linked to its saved strategy, so Save replaces it; a deleted one is simply forgotten.
+    const strategyId = draft.strategyId;
+    loadStrategy(strategyId).then((detail) => {
+      if (draftRestored.current && paperStrategySelectionEpoch.current === 0) {
+        setLoadedStrategy(detail);
+        setPaperStrategy(detail);
+        setSelectedStrategyId(strategyId);
+      }
+    }).catch(() => undefined);
   };
 
   const restorePreviousEditor = () => {

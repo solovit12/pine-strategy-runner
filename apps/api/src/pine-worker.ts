@@ -2,6 +2,7 @@ import { Indicator, PineTS } from 'pinets';
 import { applyBarIndexOffset, toPineSessionCandles } from '../../../packages/pine-runtime/src/bar-index-origin.js';
 import { attachHighBrokerReplay } from '../../../packages/pine-runtime/src/high-execution.js';
 import { HighSafetyError } from '../../../packages/pine-runtime/src/high-safety.js';
+import { explainPineRuntimeError, PineCodeError, pineCodeError } from '../../../packages/pine-runtime/src/pine-errors.js';
 import { normalizeStrategy } from '../../../packages/pine-runtime/src/normalize.js';
 import { pineSymbolInfo } from '../../../packages/pine-runtime/src/symbol-info.js';
 import { UnsupportedPineFeatureError } from '../../../packages/pine-runtime/src/pine-source-safety.js';
@@ -22,6 +23,8 @@ let seriesFailure: Error | null = null;
 function errorKind(error: unknown, messageText: string): WorkerFailure['error']['kind'] {
   return error instanceof HighSafetyError
     ? error.kind
+    : error instanceof PineCodeError
+      ? error.kind
     : error instanceof UnsupportedPineFeatureError || error instanceof SeriesRequestError
       ? error.kind
       : /parse|syntax|token|declaration/i.test(messageText) ? 'compile' : 'runtime';
@@ -100,6 +103,10 @@ process.on('message', async (message: WorkerRequest | SeriesResponseMessage) => 
       async getSymbolInfo() { return symbolInfo; },
       configure() {},
     };
+    // A code mistake is explained before the engine reads the declaration, which would
+    // otherwise report it as "[Indicator.prop] unknown key".
+    const codeError = pineCodeError(message.source);
+    if (codeError) throw codeError;
     const pine = new PineTS(source as never, message.market.tickerId, message.market.pineTimeframe);
     const strategy = new Indicator(message.source);
     const defaults = tradingViewStrategyDefaults(message.source);
@@ -159,7 +166,7 @@ process.on('message', async (message: WorkerRequest | SeriesResponseMessage) => 
       },
     };
   } catch (caught) {
-    const error = seriesFailure ?? caught;
+    const error = seriesFailure ?? explainPineRuntimeError(caught, (message as WorkerRequest).source ?? '') ?? caught;
     const messageText = error instanceof Error ? error.message : String(error);
     response = { ok: false, error: { message: messageText.slice(0, 2_000), kind: errorKind(error, messageText) } };
   }

@@ -73,6 +73,12 @@ function bilingualMessage(english: string, russian: string): string {
   return `${english} / ${russian}`;
 }
 
+/** Prefixes each language of an "English / Русский" message (or a plain one) separately. */
+function prefixedMessage(english: string, russian: string, message: string): string {
+  const match = /^(.*?) \/ ([А-ЯЁа-яё].*)$/s.exec(message);
+  return bilingualMessage(`${english} ${match ? match[1] : message}`, `${russian} ${match ? match[2] : message}`);
+}
+
 /**
  * `all`: one process does everything (development and tests).
  * `engine`: only Paper, behind a shared token, so it survives site restarts.
@@ -862,7 +868,9 @@ export async function buildApp(options: BuildAppOptions = {}) {
     if (!workerResult.ok) {
       finished = true;
       return reply.code(422).send({
-        error: `${bilingualMessage('The Pine strategy failed.', 'Ошибка выполнения Pine-стратегии.')} ${workerResult.error.message}`,
+        error: workerResult.error.kind === 'compile'
+          ? prefixedMessage('The Pine code has a mistake.', 'В коде Pine ошибка.', workerResult.error.message)
+          : prefixedMessage('The Pine strategy failed.', 'Ошибка выполнения Pine-стратегии.', workerResult.error.message),
         kind: workerResult.error.kind,
       });
     }

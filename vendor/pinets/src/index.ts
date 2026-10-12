@@ -23,6 +23,8 @@ export { aggregateCandles, selectSubTimeframe, getAggregationRatio } from './mar
 export { splitTickerModifier, stripTickerModifier, withTickerModifier, decodeTickerId, encodeTickerId } from './tickerModifier';
 
 export { PineTS, Context, Provider, Indicator, PineRuntimeError };
+// Syntax check without running: Pine Strategy Runner explains code errors before a run.
+export { pineToJS } from './transpiler/pineToJS/pineToJS.index';
 export type { StrategyBrokerTick, StrategyBrokerTickAudit, StrategyBrokerPendingOrder, StrategyBrokerReplayController, StrategyBrokerReplayHook } from './PineTS.class';
 export type { StrategyReplayOrderAudit, StrategyExternalFill, StrategyExternalFillResult } from './namespaces/strategy/utils';
 export { snapshotStrategyState, restoreStrategyState, applyExternalStrategyFill } from './namespaces/strategy/utils';

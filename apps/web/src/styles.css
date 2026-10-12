@@ -481,3 +481,8 @@ tbody tr:hover { background: #141a1c; }
 .paper-data-gaps ul { margin: 6px 0; padding-left: 18px; font-size: 13px; line-height: 1.55; }
 .paper-data-gaps small { color: #c9b98f; font-size: 12px; }
 .paper-gap-tag { margin-left: 7px; padding: 1px 5px; border: 1px solid #6b5527; color: var(--amber); font: 700 10px/1.4 "Cascadia Code", Consolas, monospace; text-transform: uppercase; }
+
+/* Paper: xyz stock and commodity markets outside their home exchange's hours. */
+.paper-xyz-notice { display: flex; gap: 10px; align-items: flex-start; margin-top: 14px; padding: 11px 13px; border: 1px solid #6b5527; background: #1d1910; color: #f0dfb9; font-size: 13px; line-height: 1.5; }
+.paper-xyz-notice > svg { flex: none; margin-top: 2px; color: var(--amber); }
+.paper-xyz-notice strong { display: block; color: #ffe2a8; }

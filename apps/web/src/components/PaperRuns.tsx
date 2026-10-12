@@ -7,6 +7,8 @@ import {
 } from '../lib/api';
 import { NativeRunNotice } from './NativeRunNotice';
 import { InfoTooltip } from './TranslatedText';
+import { XyzHoursNotice } from './XyzHoursNotice';
+import { isXyzMarket } from '../lib/stock-hours';
 import type { PaperExperimentRuntimeView } from '../../../../packages/shared/src/paper-experiment-contracts';
 
 const statusLabel: Record<PaperExperimentStatus, string> = {
@@ -383,6 +385,8 @@ export function PaperRuns({ onPrepare }: { onPrepare: () => void }) {
         <button type="button" className="paper-text-button" onClick={() => openRun(null)}><ArrowLeft size={15} />All runs</button>
         {!detail ? <p>{refreshError ? 'Run details are unavailable.' : 'Loading run details…'}</p> : <>
           <PaperRunDataGaps detail={detail} />
+          {!['completed', 'interrupted'].includes(detail.status) && <XyzHoursNotice onlyWhenClosed
+            markets={[...new Set(detail.tracks.filter((track) => track.venue === 'Hyperliquid' && isXyzMarket(track.market)).map((track) => track.market))]} />}
           <PaperPositionsTable detail={detail} />
           <section className="paper-activity-panel paper-run-overview" aria-labelledby="paper-run-title">
             <div className="paper-run-detail-header"><div><span className="eyebrow">EXPERIMENT / {detail.id}</span><h2 id="paper-run-title">{detail.strategyName}</h2><p>Status: <strong>{visibleStatus(detail)}</strong>{visibleStatus(detail) === 'Stop needs attention' && <> <InfoTooltip label="stop needs attention" en="The server could not confirm that shutdown finished. This experiment may still block a new launch. Try Retry stop after the runtime issue is resolved." ru="Сервер не смог подтвердить завершение остановки. Этот эксперимент может блокировать новый запуск. После устранения проблемы можно повторить остановку." /></>}</p></div>{canStop && <button className="paper-text-button paper-stop-button" type="button" disabled={stopBusy} onClick={() => { void stopRun(); }}>{stopBusy ? 'Stopping…' : detail.status === 'stopping' ? 'Retry stop' : 'Stop experiment'}</button>}</div>

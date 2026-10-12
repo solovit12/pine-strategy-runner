@@ -11,6 +11,7 @@ import {
 } from '../../../../packages/pine-runtime/src/live-engine.js';
 import type { PineSymbolMarket } from '../../../../packages/pine-runtime/src/symbol-info.js';
 import { UnsupportedPineFeatureError } from '../../../../packages/pine-runtime/src/pine-source-safety.js';
+import { explainPineRuntimeError } from '../../../../packages/pine-runtime/src/pine-errors.js';
 import {
   aggregateCandles,
   isChartSymbol,
@@ -135,7 +136,8 @@ process.on('message', (message: PineLiveWorkerRequest) => {
     else pending?.reject(new SeriesRequestError(message.error ?? 'Candles for request.security are unavailable.'));
     return;
   }
-  chain = chain.then(() => handle(message)).catch((error: unknown) => {
+  chain = chain.then(() => handle(message)).catch((caught: unknown) => {
+    const error = explainPineRuntimeError(caught, init?.source ?? '') ?? caught;
     send({ type: 'error', id: message.type === 'run' ? message.id : null,
       message: (error instanceof Error ? error.message : String(error)).slice(0, 2_000) });
   });

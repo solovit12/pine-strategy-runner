@@ -1,5 +1,8 @@
 import { AlertTriangle, ArrowLeft, ArrowRight, Plus, X } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { readPaperDraft, writePaperDraft } from '../lib/editor-draft';
+import { isXyzMarket } from '../lib/stock-hours';
+import { XyzHoursNotice } from './XyzHoursNotice';
 import {
   PAPER_MARKET_SYMBOL_PATTERN, PINE_LIVE_TIMEFRAMES, pythonStrategyRef,
   type PineLivePaperSettingsV1, type PythonLivePaperSettingsV1, type StrategyDetail, type StrategySummary,
@@ -227,12 +230,19 @@ export function PaperSetupPreview({ source, fromBacktest, fromEditor = fromBackt
   const saved = !startsFromEditor && isLive(savedStrategy?.version.paperSettings)
     ? savedStrategy!.version.paperSettings as LiveSettings : null;
   const initial = saved && isPythonLive(saved) && !pythonAllowed ? null : saved;
-  const [kind, setKind] = useState<'pine' | 'python'>(isPythonLive(initial) ? 'python' : 'pine');
+  // Settings changed before a page reload come back first (the Strategy page's Paper tab only).
+  const [restored] = useState(() => {
+    const draft = embedded ? readPaperDraft() : null;
+    return draft && draft.kind === 'python' && !pythonAllowed ? null : draft;
+  });
+  /** The restored draft already holds this strategy's settings; do not overwrite it once they load. */
+  const keepRestoredFor = useRef(restored?.strategyId ?? null);
+  const [kind, setKind] = useState<'pine' | 'python'>(restored?.kind ?? (isPythonLive(initial) ? 'python' : 'pine'));
   const [pythonList, setPythonList] = useState<PythonStrategyInfo[] | null>(null);
   const [pythonError, setPythonError] = useState('');
-  const [pythonRef, setPythonRef] = useState(isPythonLive(initial) ? initial.strategyRef : '');
-  const [paramText, setParamText] = useState<Record<string, string>>(() => isPythonLive(initial)
-    ? Object.fromEntries(Object.entries(initial.params).map(([name, value]) => [name, String(value)])) : {});
+  const [pythonRef, setPythonRef] = useState(restored?.pythonRef ?? (isPythonLive(initial) ? initial.strategyRef : ''));
+  const [paramText, setParamText] = useState<Record<string, string>>(() => restored?.paramText ?? (isPythonLive(initial)
+    ? Object.fromEntries(Object.entries(initial.params).map(([name, value]) => [name, String(value)])) : {}));
   const defaultTimeframe: Timeframe = (PINE_LIVE_TIMEFRAMES as readonly string[]).includes(backtestTimeframe ?? '')
     ? backtestTimeframe as Timeframe : '1h';
   const defaultMarket = baseMarket(backtestSymbol);
@@ -245,19 +255,23 @@ export function PaperSetupPreview({ source, fromBacktest, fromEditor = fromBackt
     awaitingLastRun.current = false;
     setSourceChoice('saved');
   }, [savedStrategy]);
-  const [timeframe, setTimeframe] = useState<Timeframe>(initial?.timeframe ?? defaultTimeframe);
-  const [tracks, setTracks] = useState<Record<Venue, string[]>>(() => ({
+  const [timeframe, setTimeframe] = useState<Timeframe>(restored?.timeframe ?? initial?.timeframe ?? defaultTimeframe);
+  const [tracks, setTracks] = useState<Record<Venue, string[]>>(() => restored?.tracks ?? ({
     Hyperliquid: initial ? initial.tracks.filter((t) => t.venue === 'Hyperliquid').map((t) => t.market) : defaultMarket ? [defaultMarket] : [],
     Lighter: initial ? initial.tracks.filter((t) => t.venue === 'Lighter').map((t) => t.market) : defaultMarket ? [defaultMarket] : [],
   }));
-  const [capital, setCapital] = useState(String(initial?.capitalPerVenue ?? 10_000));
-  const [orderSize, setOrderSize] = useState(String(initial?.orderSizePercent ?? 10));
-  const [fees, setFees] = useState(() => ({
+  const [capital, setCapital] = useState(restored?.capital ?? String(initial?.capitalPerVenue ?? 10_000));
+  const [orderSize, setOrderSize] = useState(restored?.orderSize ?? String(initial?.orderSizePercent ?? 10));
+  const [fees, setFees] = useState(() => restored?.fees ?? ({
     hyperliquidMakerFeePercent: String(initial?.hyperliquidMakerFeePercent ?? DEFAULT_PAPER_FEES.hyperliquidMakerFeePercent),
     hyperliquidTakerFeePercent: String(initial?.hyperliquidTakerFeePercent ?? DEFAULT_PAPER_FEES.hyperliquidTakerFeePercent),
     lighterMakerFeePercent: String(initial?.lighterMakerFeePercent ?? DEFAULT_PAPER_FEES.lighterMakerFeePercent),
     lighterTakerFeePercent: String(initial?.lighterTakerFeePercent ?? DEFAULT_PAPER_FEES.lighterTakerFeePercent),
   }));
+  useEffect(() => {
+    if (!embedded) return;
+    writePaperDraft({ strategyId: savedStrategy?.strategy.id ?? null, kind, pythonRef, paramText, timeframe, tracks, capital, orderSize, fees });
+  }, [embedded, savedStrategy?.strategy.id, kind, pythonRef, paramText, timeframe, tracks, capital, orderSize, fees]);
   const [markets, setMarkets] = useState<Record<Venue, string[] | null>>({ Hyperliquid: null, Lighter: null });
   const [marketErrors, setMarketErrors] = useState<Record<Venue, string>>({ Hyperliquid: '', Lighter: '' });
   const [volumes, setVolumes] = useState<Record<Venue, Record<string, number> | null>>({ Hyperliquid: null, Lighter: null });
@@ -339,6 +353,10 @@ export function PaperSetupPreview({ source, fromBacktest, fromEditor = fromBackt
   // Opening a saved strategy in the editor brings its saved Paper settings along.
   useEffect(() => {
     if (!embedded || !savedStrategy || savedStrategy.version.source !== source || !isLive(savedStrategy.version.paperSettings)) return;
+    if (keepRestoredFor.current === savedStrategy.strategy.id) {
+      keepRestoredFor.current = null;
+      return;
+    }
     applySettings(savedStrategy.version.paperSettings as LiveSettings);
   }, [embedded, savedStrategy?.strategy.id, savedStrategy?.version.version]);
 
@@ -523,6 +541,7 @@ export function PaperSetupPreview({ source, fromBacktest, fromEditor = fromBackt
             onRemove={(market) => setTracks((current) => ({ ...current, [venue]: current[venue].filter((item) => item !== market) }))} />;
           })}
         </div>
+        <XyzHoursNotice markets={tracks.Hyperliquid.filter(isXyzMarket)} />
       </section>
 
       <section className="paper-card paper-readiness-card">

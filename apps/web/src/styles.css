@@ -473,3 +473,11 @@ tbody tr:hover { background: #141a1c; }
 .property-checkbox { display: flex !important; align-items: center; gap: 9px; align-self: end; min-height: 42px; cursor: pointer; }
 .property-checkbox input { width: 17px; height: 17px; margin: 0; accent-color: var(--green); }
 .property-checkbox > span { margin: 0 !important; }
+
+/* Run page: markets without fresh data after a lost connection. */
+.paper-data-gaps { display: flex; gap: 12px; align-items: flex-start; margin-top: 16px; padding: 12px 14px; border: 1px solid #6b5527; background: #1d1910; color: #f0dfb9; }
+.paper-data-gaps > svg { flex: none; margin-top: 2px; color: var(--amber); }
+.paper-data-gaps strong { display: block; color: #ffe2a8; }
+.paper-data-gaps ul { margin: 6px 0; padding-left: 18px; font-size: 13px; line-height: 1.55; }
+.paper-data-gaps small { color: #c9b98f; font-size: 12px; }
+.paper-gap-tag { margin-left: 7px; padding: 1px 5px; border: 1px solid #6b5527; color: var(--amber); font: 700 10px/1.4 "Cascadia Code", Consolas, monospace; text-transform: uppercase; }

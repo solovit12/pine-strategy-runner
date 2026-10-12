@@ -42,8 +42,8 @@ from psr_sdk import Instrument, resolve_params
 from psr_sdk.packs import load_strategy
 from psr_sdk.runner import StrategyRunner
 from paper_core import (
-    ACTIVE_ORDER_STATES, ENTRY_BOOK_WINDOW_MS, ENTRY_MAX_WAIT_MS, TrackStrategy, decimal_string, now_ms, positive,
-    validate_common,
+    ACTIVE_ORDER_STATES, ENTRY_BOOK_WINDOW_MS, ENTRY_MAX_WAIT_MS, SOURCE_CLOCK_SKEW_NS, TrackStrategy, decimal_string,
+    now_ms, positive, validate_common,
 )
 from diagnostics import DecisionDiagnostics
 
@@ -51,6 +51,10 @@ from diagnostics import DecisionDiagnostics
 PINNED_NAUTILUS = "2.0.0rc6.dev20260929"
 PINNED_FAST_NAUTILUS = "2.0.0rc6.dev20260929+hlfast5.1"
 RECOVERY_PROGRESS_MS = 30_000
+# A reconnected market without a fresh book is revived on its own: resubscribe its book
+# (the venue answers with a full snapshot) after these waits, the last one repeating.
+# The venue socket is never reconnected for one market: that would pause the healthy ones.
+REVIVE_DELAYS_MS = (10_000, 30_000, 60_000, 300_000)
 # Runs now continue across UTC days; bound per-run journal growth instead.
 OUTBOX_CAP_BYTES = 512 * 1024 * 1024
 SNAPSHOT_IDLE_MS = 15_000
@@ -218,7 +222,7 @@ class PineTrackStrategy(TrackStrategy):
         self.manager.apply_set(item, now_ms())
         self.controller.event(self.spec.key, f"Pine order set for bar closing {item['barCloseMs']}: "
                               f"{len(item.get('orders') or [])} order(s), {len(item.get('trades') or [])} open Pine trade(s)")
-        if not self.controller.recovering and not self.controller.stopping and self.fresh():
+        if not self.controller.track_recovering(self.spec.key) and not self.controller.stopping and self.fresh():
             self._try_orders(now_ms())
         self._flush_reports()
 
@@ -227,7 +231,7 @@ class PineTrackStrategy(TrackStrategy):
         self.manager.on_quote(quote.bid_price, quote.ask_price, at_ms)
 
     def _try_orders(self, at_ms):
-        if self.controller.recovering or self.controller.stopping:
+        if self.controller.track_recovering(self.spec.key) or self.controller.stopping:
             return
         if self.last_quote is not None:
             self.manager.input_source_ns = self.last_quote_event_ns
@@ -239,7 +243,7 @@ class PineTrackStrategy(TrackStrategy):
 
     def _on_due(self):
         self.next_alert_ms = None
-        if self.controller.recovering or self.controller.stopping:
+        if self.controller.track_recovering(self.spec.key) or self.controller.stopping:
             return
         at_ms = now_ms()
         if self.input_diagnostics(at_ms)[0]:
@@ -470,7 +474,7 @@ class PineTrackStrategy(TrackStrategy):
         self.manager.exec_result(state["request"].id, filled=filled, average=average, opened=opened,
                                  now_ms=now_ms(), reason=reason or state["reason"])
         self.controller.snapshot()
-        if not self.controller.stopping and not self.controller.recovering:
+        if not self.controller.stopping and not self.controller.track_recovering(self.spec.key):
             self._try_orders(now_ms())
         else:
             self._flush_reports()
@@ -494,7 +498,7 @@ class PineTrackStrategy(TrackStrategy):
         reasons, ages = self.input_diagnostics(at_ms)
         if self.controller.stopping:
             reasons = []
-        elif self.controller.recovering:
+        elif self.controller.track_recovering(self.spec.key):
             reasons = ["recovery"]
         else:
             if self.manager.entries_gated and any(leg.order.get("category") == "entry" for leg in self.manager.legs.values()):
@@ -506,7 +510,7 @@ class PineTrackStrategy(TrackStrategy):
         self.controller.diagnostics[self.spec.key].waits(sorted(set(reasons)), ages)
 
     def stop_new_orders(self):
-        if not (self.controller.recovering and not self.controller.stopping):
+        if not (self.controller.track_recovering(self.spec.key) and not self.controller.stopping):
             self.manager.stop()
             self.queue = []
         for order_id in list(self.pending_order_ids):
@@ -599,7 +603,7 @@ class SdkTrackStrategy(PineTrackStrategy):
         else:
             for bar in bars:
                 self.runner.on_bar(bar, at_ms)
-        if not self.controller.recovering and not self.controller.stopping and self.fresh():
+        if not self.controller.track_recovering(self.spec.key) and not self.controller.stopping and self.fresh():
             self._try_orders(at_ms)
 
     def _decide(self, quote, at_ms):
@@ -646,6 +650,8 @@ class RuntimeController:
         self.stop_reason = None
         self.stage = "waiting_for_data"
         self.strategies = {}
+        # Source-side bridges per market; revival resubscribes a market's book through it.
+        self.bridges = {}
         self.public_frames = {key: 0 for key in self.specs}
         self.last_public_ms = {key: None for key in self.specs}
         self.instrument_ready_keys = set()
@@ -671,7 +677,11 @@ class RuntimeController:
 
     @property
     def recovering(self):
+        """Any market is recovering; each market pauses and resumes on its own."""
         return self.recovery_started_ns is not None
+
+    def track_recovering(self, key):
+        return key in self.recovery_gaps
 
     def _outbox_failure(self, error):
         self.failed = True
@@ -751,7 +761,8 @@ class RuntimeController:
             for track_key, spec in self.specs.items():
                 if spec.venue_key == key and track_key in self.recovery_gaps and not self.stopping:
                     gap = self.recovery_gaps[track_key]
-                    gap.update(connected=True, after_ns=after_ns, book_ready=False, quote_ready=False)
+                    gap.update(connected=True, after_ns=after_ns, book_ready=False, quote_ready=False,
+                               next_revive_ns=time.monotonic_ns() + REVIVE_DELAYS_MS[0] * 1_000_000)
                     gap["attempt"] += 1
                     self.strategies[track_key].invalidate_inputs(gap["after_ns"])
                     self.reset_venue_stream(key)
@@ -772,15 +783,15 @@ class RuntimeController:
             self.recovery_count += 1
             self.last_recovery_progress_ns = None
             self.stage = "recovering"
-            for strategy in self.strategies.values():
-                strategy.pause_for_recovery(floor_ns)
             self.flush_diagnostics(force=True, reason="recovery", close=True)
             self.emitter.emit("phase", stage="recovering",
-                              message="Public data interrupted; waiting for reconnection and fresh market data")
+                              message="Public data interrupted; the affected markets wait for reconnection and fresh market data")
         if key not in self.recovery_gaps:
             self.recovery_gaps[key] = {
-                "started_ns": time.monotonic_ns(), "discarded": 0, "attempt": 0,
+                "started_ns": time.monotonic_ns(), "started_ms": now_ms(), "discarded": 0, "attempt": 0, "revives": 0,
             }
+            # Only this market pauses; other markets and the other venue keep trading.
+            self.strategies[key].pause_for_recovery(floor_ns)
             self.event(key, f"Public data gap started: {self.specs[key].display}; gap {self.recovery_count}; waiting for verified recovery.")
         self.recovery_gaps[key].update(connected=False, after_ns=floor_ns, book_ready=False, quote_ready=False)
         self.strategies[key].invalidate_inputs(floor_ns)
@@ -806,6 +817,18 @@ class RuntimeController:
             for endpoint in endpoints:
                 self.strategies[key].reconnect_socket(ClientId(str(spec.source_venue)), endpoint)
 
+    def recover_silent_market(self, key):
+        """One market silent while its venue still delivers the others: pause and resubscribe it alone."""
+        spec = self.specs[key]
+        self.begin_recovery(key)
+        gap = self.recovery_gaps[key]
+        after_ns = time.time_ns()
+        gap.update(connected=True, after_ns=after_ns, next_revive_ns=time.monotonic_ns())
+        gap["attempt"] += 1
+        self.strategies[key].invalidate_inputs(after_ns)
+        self.event(key, f"Public feed silent for 60 seconds: {spec.market}; requesting its order book again.")
+        self.revive_stalled_tracks()
+
     def allow_public_frame(self, key, kind, ts_event, ts_init, complete=False):
         if self.stopping:
             return False
@@ -817,10 +840,11 @@ class RuntimeController:
         # already define the effective quote without making this BBO stale.
         previous = max(self.accepted_source_ns[(key, kind)],
                        strategy.last_book_event_ns if kind == "book" else strategy.last_bbo_event_ns)
-        if ts_event < max(strategy.input_floor_ns, previous) or ts_init < strategy.input_floor_ns:
+        source_floor_ns = strategy.input_floor_ns - SOURCE_CLOCK_SKEW_NS
+        if ts_event < max(source_floor_ns, previous) or ts_init < strategy.input_floor_ns:
             if gap:
                 gap["discarded"] += 1
-            reason = ("source_before_reconnect" if ts_event < strategy.input_floor_ns else
+            reason = ("source_before_reconnect" if ts_event < source_floor_ns else
                       "received_before_reconnect" if ts_init < strategy.input_floor_ns else "source_out_of_order")
             self.diagnostics[key].skip(f"bridge_{kind}", ["initialized_before_reconnect" if reason == "received_before_reconnect" else reason],
                 {"eventSourceMs": now_ms() - ts_event // 1_000_000, "eventInitMs": now_ms() - ts_init // 1_000_000})
@@ -829,7 +853,8 @@ class RuntimeController:
         if gap is None:
             self.accepted_source_ns[(key, kind)] = ts_event
             return True
-        allowed = (gap["connected"] and ts_init >= gap["after_ns"] and ts_event >= gap["after_ns"])
+        allowed = (gap["connected"] and ts_init >= gap["after_ns"]
+                   and ts_event >= gap["after_ns"] - SOURCE_CLOCK_SKEW_NS)
         if kind == "book" and not gap["book_ready"] and not complete:
             allowed = False
         if not allowed:
@@ -935,13 +960,20 @@ class RuntimeController:
             blockers.extend(f"{key}.{reason}" for reason in reasons)
         return blockers, ages
 
+    def split_recovery_blockers(self, blockers):
+        """Blockers of each recovering market, and those that hold every market."""
+        own = {key: [reason for reason in blockers if reason.startswith(f"{key}.")] for key in self.recovery_gaps}
+        shared = [reason for reason in blockers if not any(reason.startswith(f"{key}.") for key in self.specs)]
+        return own, shared
+
     def observe_recovery_inputs(self):
         # Evaluate on actual strategy delivery, after Sandbox processed the book.
         # A usable sub-500ms window must not be lost between watchdog polls.
         if self.stopping:
             return
         blockers, ages = self.recovery_input_state()
-        if not blockers:
+        own, shared = self.split_recovery_blockers(blockers)
+        if not shared and any(not reasons for reasons in own.values()):
             if self.recovery_first_market_ready_ns is None:
                 self.recovery_first_market_ready_ns = time.monotonic_ns()
                 self.recovery_diagnostic("market_ready", blockedBy=[], ages=ages)
@@ -959,38 +991,67 @@ class RuntimeController:
         if log_wait:
             self.last_recovery_progress_ns = at_ns
         blockers, ages = self.recovery_input_state()
-        if blockers:
-            if log_wait:
-                self.recovery_diagnostic("check", blockedBy=blockers, ages=ages, audit="not_run")
-            return
+        own, shared = self.split_recovery_blockers(blockers)
+        waiting, resumed, audited = list(shared), [], False
         audit_started_ns = time.monotonic_ns()
         try:
-            for key, strategy in self.strategies.items():
+            for key in list(self.recovery_gaps):
+                if shared or own[key]:
+                    waiting.extend(own[key])
+                    continue
+                # Each market resumes as soon as its own data and account audit are verified.
+                strategy = self.strategies[key]
+                audited = True
                 if not strategy.recovery_audit_ready():
-                    if log_wait:
-                        self.recovery_diagnostic("check", blockedBy=[f"{key}.{strategy.recovery_audit_blocker}"],
-                            ages=ages, audit="waiting", auditMs=(time.monotonic_ns() - audit_started_ns) / 1_000_000)
-                    return
-            audit_ms = (time.monotonic_ns() - audit_started_ns) / 1_000_000
-            self.recovery_diagnostic("check", blockedBy=[], ages=ages, audit="passed", auditMs=audit_ms)
-            for strategy in self.strategies.values():
+                    waiting.append(f"{key}.{strategy.recovery_audit_blocker}")
+                    continue
                 strategy.resume_after_recovery()
+                resumed.append(key)
         except Exception as exc:
             self.fail(f"Paper recovery account audit failed: {type(exc).__name__}: {exc}")
+            return
+        audit_ms = (time.monotonic_ns() - audit_started_ns) / 1_000_000
+        for key in resumed:
+            gap = self.recovery_gaps.pop(key)
+            duration = (time.monotonic_ns() - gap["started_ns"]) // 1_000_000
+            self.event(key, f"Public data gap recovered: {self.specs[key].display}; gap {self.recovery_count}; duration {duration} ms; discarded {gap['discarded']} observations.")
+        if self.recovery_gaps:
+            if log_wait or resumed:
+                self.recovery_diagnostic("check", blockedBy=waiting, ages=ages,
+                                         audit="partial" if resumed else "waiting" if audited else "not_run", auditMs=audit_ms,
+                                         resumed=resumed, waitingFor=sorted(self.recovery_gaps))
+            if resumed:
+                self.snapshot()
             return
         started_ns = self.recovery_started_ns
         first_ready_ms = ((self.recovery_first_market_ready_ns - started_ns) // 1_000_000
                           if self.recovery_first_market_ready_ns is not None else None)
-        for key, gap in self.recovery_gaps.items():
-            duration = (time.monotonic_ns() - gap["started_ns"]) // 1_000_000
-            self.event(key, f"Public data gap recovered: {self.specs[key].display}; gap {self.recovery_count}; duration {duration} ms; discarded {gap['discarded']} observations.")
-        self.recovery_gaps.clear()
         self.recovery_started_ns = None
         self.stage = "running"
         self.recovery_diagnostic("resumed", started_ns=started_ns, blockedBy=[], ages=ages,
             auditMs=audit_ms, firstMarketReadyMs=first_ready_ms)
         self.emitter.emit("phase", stage="running", message="Public data recovered; Paper accounts preserved")
         self.snapshot()
+
+    def revive_stalled_tracks(self):
+        """Reconnected markets still without a fresh book: ask the venue again, one market at a time.
+
+        Both venues answer an unsubscribe + subscribe of one market's book on the same
+        connection with a full snapshot.
+        """
+        if self.stopping or self.config["mode"] != "public":
+            return
+        at_ns = time.monotonic_ns()
+        for key, gap in list(self.recovery_gaps.items()):
+            if not gap.get("connected") or gap.get("book_ready") or at_ns < gap.get("next_revive_ns", at_ns + 1):
+                continue
+            gap["revives"] += 1
+            attempt = gap["revives"]
+            gap["next_revive_ns"] = at_ns + REVIVE_DELAYS_MS[min(attempt, len(REVIVE_DELAYS_MS) - 1)] * 1_000_000
+            spec = self.specs[key]
+            self.event(key, f"{spec.market}: no fresh order book since the reconnect; resubscribing (attempt {attempt}).")
+            self.bridges[key].resubscribe_book()
+            self.snapshot()
 
     # ----- strategy-kind hooks (the native strategy overrides them) -----------
 
@@ -1081,8 +1142,12 @@ class RuntimeController:
                     **{name: 0 for name in counters}, "priceReady": False, "positions": [],
                 }
                 rows.append(row)
+                gap = self.recovery_gaps.get(key)
                 tracks.append({"venue": spec.display, "market": spec.market,
-                    **{name: row[name] for name in counters if name != "brokerRevision"}, "priceReady": row["priceReady"]})
+                    **{name: row[name] for name in counters if name != "brokerRevision"}, "priceReady": row["priceReady"],
+                    # A market waiting for data after a gap; the page lists it with its age and retries.
+                    **({"dataGap": {"sinceMs": gap["started_ms"], "connected": bool(gap.get("connected")),
+                                    "resubscribes": gap["revives"]}} if gap else {})})
             if not rows:
                 # A venue without selected markets keeps its untouched account.
                 accounts.append({"venue": venue_spec.display, "cashBalance": self.config["capitalPerVenue"],
@@ -1266,7 +1331,8 @@ async def monitor_stdin(controller, offline_sources):
                     if key not in controller.specs or key not in offline_sources:
                         raise ValueError("offline source not ready")
                     offline_sources[key].publish_frame(item["bids"], item["asks"], market=item.get("market", "HYPE"),
-                        part=item.get("part", "both"), snapshot=item.get("snapshot", True), age_ms=item.get("ageMs", 0))
+                        part=item.get("part", "both"), snapshot=item.get("snapshot", True), age_ms=item.get("ageMs", 0),
+                        source_lag_ms=item.get("sourceLagMs", 0))
                 else:
                     raise ValueError(f"unsupported command: {command}")
             except Exception as exc:
@@ -1299,6 +1365,7 @@ async def watchdog(controller, node_task):
             return
         at_ms = now_ms()
         try:
+            controller.revive_stalled_tracks()
             controller.check_recovery()
         except Exception as exc:
             controller.fail(f"Paper recovery check failed: {type(exc).__name__}: {exc}")
@@ -1313,15 +1380,24 @@ async def watchdog(controller, node_task):
             controller.fail(f"Paper diagnostics failed: {type(exc).__name__}: {exc}")
             return
         for key in controller.specs:
-            if controller.recovering:
+            if controller.track_recovering(key):
                 continue
             last = controller.last_public_ms[key]
             if last is None and at_ms - controller.started_ms > 30_000:
                 controller.fail(f"{controller.specs[key].display} {controller.specs[key].market} public feed produced no frames for 30 seconds", key)
                 return
             if last is not None and at_ms - last > 60_000:
+                venue = controller.specs[key].venue_key
+                # The whole venue silent means a broken socket; one silent market is resubscribed alone.
+                venue_silent = all(
+                    controller.track_recovering(other) or (controller.last_public_ms[other] is not None
+                                                           and at_ms - controller.last_public_ms[other] > 60_000)
+                    for other, spec in controller.specs.items() if spec.venue_key == venue)
                 try:
-                    controller.recover_silent_feed(key)
+                    if venue_silent:
+                        controller.recover_silent_feed(key)
+                    else:
+                        controller.recover_silent_market(key)
                 except Exception as exc:
                     controller.fail(f"Public reconnect request failed: {type(exc).__name__}: {exc}", key)
                     return

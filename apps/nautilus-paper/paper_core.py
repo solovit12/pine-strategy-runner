@@ -27,6 +27,10 @@ ACTIVE_ORDER_STATES = {"INITIALIZED", "SUBMITTED", "ACCEPTED", "PARTIALLY_FILLED
 # waits for the next book message (Hyperliquid snapshots arrive ~every 540 ms).
 ENTRY_DELAY_MS = 200
 EXIT_DELAY_MS = 300
+# A venue stamps data with its own clock. Data received after a reconnect may carry a
+# source time slightly before our local reconnect moment (clock skew, or a snapshot
+# built when the subscribe arrived); only data received before the reconnect is stale.
+SOURCE_CLOCK_SKEW_NS = 2_000_000_000
 # An entry that cannot be evaluated on current data within this window after
 # arrival is dropped (a real IOC would have been answered long before).
 ENTRY_MAX_WAIT_MS = 2_000
@@ -282,13 +286,14 @@ class TrackStrategy(Strategy):
     def _on_quote(self, quote):
         timing = InputTiming.capture(quote)
         at_ms = now_ms()
+        source_floor_ns = self.input_floor_ns - SOURCE_CLOCK_SKEW_NS
         if (quote.ts_event < self.last_bbo_event_ns or quote.ts_event < self.position_source_floor_ns
-                or quote.ts_event < self.input_floor_ns or quote.ts_init < self.input_floor_ns):
+                or quote.ts_event < source_floor_ns or quote.ts_init < self.input_floor_ns):
             self.stale_skipped += 1
             self.skip("quote", [reason for reason, blocked in (
                 ("source_out_of_order", quote.ts_event < self.last_bbo_event_ns),
                 ("source_before_position", quote.ts_event < self.position_source_floor_ns),
-                ("source_before_reconnect", quote.ts_event < self.input_floor_ns),
+                ("source_before_reconnect", quote.ts_event < source_floor_ns),
                 ("initialized_before_reconnect", quote.ts_init < self.input_floor_ns)) if blocked], quote)
             return
         self.last_bbo_event_ns = quote.ts_event
@@ -323,7 +328,7 @@ class TrackStrategy(Strategy):
         return True
 
     def _after_input(self, scope, at_ms, quote_changed):
-        if self.controller.recovering:
+        if self.controller.track_recovering(self.spec.key):
             self.skip(scope, ["recovery"])
             self.controller.observe_recovery_inputs()
             return
@@ -350,12 +355,13 @@ class TrackStrategy(Strategy):
 
     def _on_book(self, batch):
         timing = InputTiming.capture(batch)
-        if (batch.ts_event < self.last_book_event_ns or batch.ts_event < self.input_floor_ns
+        source_floor_ns = self.input_floor_ns - SOURCE_CLOCK_SKEW_NS
+        if (batch.ts_event < self.last_book_event_ns or batch.ts_event < source_floor_ns
                 or batch.ts_init < self.input_floor_ns):
             self.stale_skipped += 1
             self.skip("book", [reason for reason, blocked in (
                 ("source_out_of_order", batch.ts_event < self.last_book_event_ns),
-                ("source_before_reconnect", batch.ts_event < self.input_floor_ns),
+                ("source_before_reconnect", batch.ts_event < source_floor_ns),
                 ("initialized_before_reconnect", batch.ts_init < self.input_floor_ns)) if blocked], batch)
             return
         fingerprint = tuple((str(delta.action), str(delta.order), delta.flags, delta.sequence)
@@ -460,7 +466,7 @@ class TrackStrategy(Strategy):
             "pendingOrders": len(self.pending_order_ids),
             "signals": self.signals, "intents": self.intents, "fills": self.fills,
             "rejectedSignals": self.rejected_signals,
-            "priceReady": bool(self.fresh()) and not self.controller.stopping and not self.controller.recovering,
+            "priceReady": bool(self.fresh()) and not self.controller.stopping and not self.controller.track_recovering(self.spec.key),
             "stalePriceObservationsSkipped": self.stale_skipped,
             "positions": positions,
         }

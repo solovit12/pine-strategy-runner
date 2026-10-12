@@ -14,7 +14,7 @@ const statusLabel: Record<PaperExperimentStatus, string> = {
   waiting_for_data: 'Waiting for data',
   warming_up: 'Warming up',
   running: 'Running',
-  recovering: 'Recovering',
+  recovering: 'Running · data gap',
   stopping: 'Stopping',
   completed: 'Completed',
   interrupted: 'Interrupted',
@@ -82,7 +82,41 @@ export function PaperRunHealth({ detail }: { detail: PaperExperimentDetail }) {
 }
 
 /** Open positions by exchange, with each exchange's balance and PnL as its group row. */
+type DataGapTrack = NonNullable<PaperExperimentRuntimeView['tracks']>[number] & { dataGap: NonNullable<NonNullable<PaperExperimentRuntimeView['tracks']>[number]['dataGap']> };
+
+/** Markets of a live run that wait for fresh exchange data after a gap. */
+function dataGapTracks(detail: PaperExperimentDetail): DataGapTrack[] {
+  if (!detail.runtime || ['completed', 'interrupted'].includes(detail.status)) return [];
+  return (detail.runtime.tracks ?? []).filter((track): track is DataGapTrack => track.dataGap !== undefined);
+}
+
+function minutesSince(ms: number, nowMs: number): string {
+  const minutes = Math.max(0, Math.floor((nowMs - ms) / 60_000));
+  return minutes < 1 ? 'under a minute' : minutes < 120 ? `${minutes} min` : `${Math.floor(minutes / 60)} h ${minutes % 60} min`;
+}
+
+/** Shown above the portfolio only while some markets have no fresh data; the others keep trading. */
+export function PaperRunDataGaps({ detail, nowMs = Date.now() }: { detail: PaperExperimentDetail; nowMs?: number }) {
+  const gaps = dataGapTracks(detail);
+  if (gaps.length === 0) return null;
+  const positions = new Set((detail.runtime?.accounts ?? []).flatMap((account) =>
+    account.positions.map((position) => `${account.venue}:${position.market}`)));
+  return <section className="paper-data-gaps" role="status" aria-labelledby="paper-data-gaps-title">
+    <AlertTriangle size={18} />
+    <div>
+      <strong id="paper-data-gaps-title">No fresh market data · {gaps.length} {gaps.length === 1 ? 'market' : 'markets'} <InfoTooltip label="markets without fresh data" en="After a lost connection a market resumes only with a fresh complete order book from its exchange. Until then it places no orders, and exits of its open position wait. Once the connection is back, the order book is requested again after 10 s, 30 s and 1 min, then every 5 minutes. Other markets are not paused." ru="После обрыва рынок продолжает торговлю только со свежим полным стаканом от биржи. До этого он не выставляет заявки, а выходы из его открытой позиции ждут. Когда связь вернулась, стакан запрашивается заново через 10 с, 30 с, 1 мин, далее раз в 5 минут. Остальные рынки не останавливаются." /></strong>
+      <ul>{gaps.map((track) => <li key={`${track.venue}:${track.market}`}>
+        <b>{track.venue} {track.market}</b> — {minutesSince(track.dataGap.sinceMs, nowMs)} without data · {track.dataGap.connected
+          ? `connection restored; order book requested again${track.dataGap.resubscribes ? ` ${track.dataGap.resubscribes} ${track.dataGap.resubscribes === 1 ? 'time' : 'times'}` : ''}`
+          : `waiting for ${track.venue} to reconnect`}{positions.has(`${track.venue}:${track.market}`) ? ' · open position: its exits wait for data' : ''}
+      </li>)}</ul>
+      <small>Other markets keep trading. A market resumes by itself as soon as its exchange sends a fresh order book.</small>
+    </div>
+  </section>;
+}
+
 export function PaperPositionsTable({ detail }: { detail: PaperExperimentDetail }) {
+  const waiting = new Set(dataGapTracks(detail).map((track) => `${track.venue}:${track.market}`));
   const runtime = detail.runtime;
   if (!runtime) return <section className="paper-activity-panel"><div className="paper-card-title"><div><span className="eyebrow">PORTFOLIO</span><h2>Open positions</h2></div></div><p className="paper-activity-empty">No account snapshot yet.</p></section>;
   const groups = detail.accounts.map((account) => {
@@ -116,7 +150,7 @@ export function PaperPositionsTable({ detail }: { detail: PaperExperimentDetail 
             const leverage = mark !== null && equity > 0 ? size * mark / equity : null;
             return <tr key={`${position.market}:${position.side}`}>
               <td>{account.venue}</td>
-              <td><strong className={position.side === 'long' ? 'paper-side-long' : 'paper-side-short'} title={position.side === 'long' ? 'Long' : 'Short'}>{position.market}</strong></td>
+              <td><strong className={position.side === 'long' ? 'paper-side-long' : 'paper-side-short'} title={position.side === 'long' ? 'Long' : 'Short'}>{position.market}</strong>{waiting.has(`${account.venue}:${position.market}`) && <small className="paper-gap-tag" title="No fresh market data: exits of this position wait">no data</small>}</td>
               <td className={upnl === null ? '' : pnlClass(upnl)}>{upnl === null ? '—' : `${signedNumber(upnl)} ${account.currency}`}</td>
               <td>{position.avgEntryPrice ?? '—'}</td>
               <td>{position.markPrice ?? '—'}</td>
@@ -348,6 +382,7 @@ export function PaperRuns({ onPrepare }: { onPrepare: () => void }) {
       {selectedId && <section className="paper-card paper-run-detail">
         <button type="button" className="paper-text-button" onClick={() => openRun(null)}><ArrowLeft size={15} />All runs</button>
         {!detail ? <p>{refreshError ? 'Run details are unavailable.' : 'Loading run details…'}</p> : <>
+          <PaperRunDataGaps detail={detail} />
           <PaperPositionsTable detail={detail} />
           <section className="paper-activity-panel paper-run-overview" aria-labelledby="paper-run-title">
             <div className="paper-run-detail-header"><div><span className="eyebrow">EXPERIMENT / {detail.id}</span><h2 id="paper-run-title">{detail.strategyName}</h2><p>Status: <strong>{visibleStatus(detail)}</strong>{visibleStatus(detail) === 'Stop needs attention' && <> <InfoTooltip label="stop needs attention" en="The server could not confirm that shutdown finished. This experiment may still block a new launch. Try Retry stop after the runtime issue is resolved." ru="Сервер не смог подтвердить завершение остановки. Этот эксперимент может блокировать новый запуск. После устранения проблемы можно повторить остановку." /></>}</p></div>{canStop && <button className="paper-text-button paper-stop-button" type="button" disabled={stopBusy} onClick={() => { void stopRun(); }}>{stopBusy ? 'Stopping…' : detail.status === 'stopping' ? 'Retry stop' : 'Stop experiment'}</button>}</div>

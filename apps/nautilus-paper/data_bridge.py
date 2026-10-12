@@ -249,13 +249,23 @@ class PublicBridge(Strategy):
         self.controller = controller
         self.published = False
         self.source_signature = None
+        if hasattr(controller, "bridges"):
+            controller.bridges[spec.key] = self
+
+    def _book_params(self):
+        return ({"fast": True} if self.spec.venue_key == "hyperliquid"
+                and self.controller.config.get("hyperliquidFastBook", False) else None)
 
     def on_start(self):
         self.subscribe_quotes(self.spec.source_id)
-        params = ({"fast": True} if self.spec.venue_key == "hyperliquid"
-                  and self.controller.config.get("hyperliquidFastBook", False) else None)
-        self.subscribe_book_deltas(self.spec.source_id, BookType.L2_MBP, managed=True, params=params)
+        self.subscribe_book_deltas(self.spec.source_id, BookType.L2_MBP, managed=True, params=self._book_params())
         self.subscribe_socket_state()
+
+    def resubscribe_book(self):
+        """Ask the venue for this market's book again; it answers with a full snapshot."""
+        params = self._book_params()
+        self.unsubscribe_book_deltas(self.spec.source_id, params=params)
+        self.subscribe_book_deltas(self.spec.source_id, BookType.L2_MBP, managed=True, params=params)
 
     def _ensure_instrument(self):
         source = self.cache.instrument(self.spec.source_id)
@@ -368,7 +378,8 @@ class OfflineSourceClient(DataClient):
             ts_event=now, ts_init=now,
         )
 
-    def publish_frame(self, bids: list[list[str]], asks: list[list[str]], *, part="both", snapshot=True, age_ms=0, market="HYPE"):
+    def publish_frame(self, bids: list[list[str]], asks: list[list[str]], *, part="both", snapshot=True, age_ms=0, market="HYPE",
+                      source_lag_ms=0):
         if market not in self.market_specs:
             raise ValueError(f"unconfigured offline market: {market}")
         spec = self.market_specs[market]
@@ -378,22 +389,26 @@ class OfflineSourceClient(DataClient):
             raise ValueError("invalid offline frame part/snapshot")
         if not isinstance(age_ms, int) or not 0 <= age_ms <= 3_600_000:
             raise ValueError("offline frame age must be 0..3600000 ms")
+        if not isinstance(source_lag_ms, int) or not 0 <= source_lag_ms <= 3_600_000:
+            raise ValueError("offline frame source lag must be 0..3600000 ms")
         self.sequence += 1
-        ts = time.time_ns() - age_ms * 1_000_000
+        received = time.time_ns() - age_ms * 1_000_000
+        # The venue's own clock may stamp the data earlier than its arrival.
+        ts = received - source_lag_ms * 1_000_000
         seq = self.sequence * 1000
-        deltas = [OrderBookDelta.clear(spec.source_id, seq, ts, ts)] if snapshot else []
+        deltas = [OrderBookDelta.clear(spec.source_id, seq, ts, received)] if snapshot else []
         for side, levels in ((OrderSide.BUY, bids), (OrderSide.SELL, asks)):
             for i, (price, size) in enumerate(levels):
                 deltas.append(OrderBookDelta(
                     spec.source_id, BookAction.ADD,
                     BookOrder(side, Price.from_str(str(price)), Quantity.from_str(str(size)), seq + len(deltas) + 1),
-                    0, seq + len(deltas) + 1, ts, ts,
+                    0, seq + len(deltas) + 1, ts, received,
                 ))
         last = deltas[-1]
         deltas[-1] = OrderBookDelta(
             spec.source_id, last.action, last.order,
             (int(RecordFlag.F_SNAPSHOT) if snapshot else 0) | int(RecordFlag.F_LAST),
-            last.sequence, ts, ts,
+            last.sequence, ts, received,
         )
         if part in ("both", "book"):
             self._handle_data(OrderBookDeltas(spec.source_id, deltas))
@@ -402,7 +417,7 @@ class OfflineSourceClient(DataClient):
         if part in ("both", "quote"):
             self._handle_data(QuoteTick(
                 spec.source_id, Price.from_str(str(bid)), Price.from_str(str(ask)),
-                Quantity.from_str(str(bid_qty)), Quantity.from_str(str(ask_qty)), ts, ts,
+                Quantity.from_str(str(bid_qty)), Quantity.from_str(str(ask_qty)), ts, received,
             ))
 
 

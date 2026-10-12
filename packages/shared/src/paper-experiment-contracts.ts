@@ -142,6 +142,8 @@ export interface PaperExperimentRuntimeView {
     readonly rejectedSignals: number;
     readonly priceReady: boolean;
     readonly stalePriceObservationsSkipped: number;
+    /** Present while this market waits for fresh data after a gap; other markets keep trading. */
+    readonly dataGap?: { readonly sinceMs: number; readonly connected: boolean; readonly resubscribes: number };
   }[];
   readonly accounts: readonly {
     readonly venue: PaperExperimentAccount['venue'];

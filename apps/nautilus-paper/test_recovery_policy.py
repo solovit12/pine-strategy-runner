@@ -70,8 +70,51 @@ class RecoveryPolicyTests(unittest.TestCase):
         self.assertEqual(str(client), str(controller.specs['hyperliquid'].source_venue))
         self.assertEqual(endpoint, 'hyperliquid-data-streams')
         self.assertFalse(controller.recovery_gaps['hyperliquid']['connected'])
-        self.assertTrue(all(s.pause_for_recovery.call_count == 1 for s in controller.strategies.values()))
+        # Only the silent venue's markets pause; the other venue keeps trading.
+        for key, strategy in controller.strategies.items():
+            expected = 1 if controller.specs[key].venue_key == 'hyperliquid' else 0
+            self.assertEqual(strategy.pause_for_recovery.call_count, expected, key)
         self.assertTrue(any('reconnect requested' in e.get('message', '') for e in events))
+
+    def test_a_reconnected_market_without_a_book_is_resubscribed_and_never_reconnected(self):
+        controller, events = self.controller(PINE_STRATEGY)
+        controller.config['mode'] = 'public'
+        key = next(k for k, spec in controller.specs.items() if spec.venue_key == 'lighter')
+        bridge = SimpleNamespace(resubscribe_book=Mock())
+        controller.bridges = {key: bridge}
+        controller.connected_endpoints.add('lighter-data-streams')
+        start = time.monotonic_ns()
+        with patch('runtime.time.monotonic_ns', return_value=start):
+            controller.begin_recovery(key)
+            controller.socket_state('lighter-data-streams', 'CONNECTED')
+        second = 1_000_000_000
+        # 10 s, then 30 s, 1 min and every 5 min; the venue socket is never reconnected for one market.
+        for at_s, resubscribes, reconnects in ((5, 0, 0), (10, 1, 0), (39, 1, 0), (41, 2, 0), (102, 3, 0), (403, 4, 0), (704, 5, 0)):
+            with patch('runtime.time.monotonic_ns', return_value=start + at_s * second):
+                controller.revive_stalled_tracks()
+            self.assertEqual(bridge.resubscribe_book.call_count, resubscribes, at_s)
+            self.assertEqual(controller.strategies[key].reconnect_socket.call_count, reconnects, at_s)
+        # Once the market has its book again, nothing more is requested.
+        controller.recovery_gaps[key]['book_ready'] = True
+        with patch('runtime.time.monotonic_ns', return_value=start + 2_000 * second):
+            controller.revive_stalled_tracks()
+        self.assertEqual(bridge.resubscribe_book.call_count, 5)
+        self.assertTrue(any('resubscribing (attempt 1)' in e.get('message', '') for e in events))
+
+    def test_one_silent_market_is_resubscribed_without_touching_its_venue(self):
+        controller, events = self.controller(PINE_STRATEGY)
+        controller.config['mode'] = 'public'
+        keys = [k for k, spec in controller.specs.items() if spec.venue_key == 'lighter']
+        key = keys[0]
+        controller.bridges = {key: SimpleNamespace(resubscribe_book=Mock())}
+        controller.recover_silent_market(key)
+        controller.bridges[key].resubscribe_book.assert_called_once()
+        self.assertTrue(controller.track_recovering(key))
+        for other in controller.specs:
+            if other != key:
+                self.assertFalse(controller.track_recovering(other), other)
+                self.assertEqual(controller.strategies[other].pause_for_recovery.call_count, 0, other)
+            self.assertEqual(controller.strategies[other].reconnect_socket.call_count, 0, other)
 
     def test_pine_and_python_recovery_does_not_read_native_hourly_signal(self):
         # Pine/Python tracks have no built-in strategy signal (signal is None);

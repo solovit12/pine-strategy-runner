@@ -1,7 +1,7 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { PaperPositionsTable, PaperRunActivity, PaperRunHealth, PaperRunRules, PaperRunHistory, PaperRunTrackTable, PaperRuns } from '../apps/web/src/components/PaperRuns';
+import { PaperPositionsTable, PaperRunActivity, PaperRunDataGaps, PaperRunHealth, PaperRunRules, PaperRunHistory, PaperRunTrackTable, PaperRuns } from '../apps/web/src/components/PaperRuns';
 import type { PaperExperimentActivity, PaperExperimentSummary, PaperExperimentDetail } from '../packages/shared/src/paper-experiment-contracts';
 
 const sample: PaperExperimentSummary = {
@@ -17,12 +17,38 @@ const sample: PaperExperimentSummary = {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('Paper run history', () => {
-  it('shows Recovering as an active run state and describes the bounded Nautilus pause', () => {
+  it('shows a data gap as a running run state, not as an alarm', () => {
     const html = renderToStaticMarkup(createElement(PaperRunHistory, {
       experiments: [{ ...sample, status: 'recovering', reason: null, endedAt: null }], onOpen: () => undefined,
     }));
-    expect(html).toContain('<strong>Recovering</strong>');
+    expect(html).toContain('<strong>Running · data gap</strong>');
     expect(html).not.toContain('Interrupted');
+  });
+
+  it('lists only the markets without fresh data and tags their open positions', () => {
+    const nowMs = Date.parse('2026-10-12T12:00:00.000Z');
+    const detail = {
+      status: 'running',
+      accounts: [{ venue: 'Lighter', accountId: 'lighter', startingCash: 1000 }],
+      runtime: { stage: 'running', engine: 'nautilus',
+        accounts: [{ venue: 'Lighter', accountId: 'lighter', cashBalance: '1000', positions: [
+          { market: 'QQQ', side: 'long', quantity: '1', avgEntryPrice: '500', markPrice: '501', unrealizedPnl: '1' },
+          { market: 'BTC', side: 'short', quantity: '0.01', avgEntryPrice: '60000', markPrice: '60000', unrealizedPnl: '0' },
+        ] }],
+        tracks: [
+          { venue: 'Lighter', market: 'QQQ', priceReady: false, pendingOrders: 0,
+            dataGap: { sinceMs: nowMs - 12 * 60_000, connected: true, resubscribes: 2 } },
+          { venue: 'Lighter', market: 'BTC', priceReady: true, pendingOrders: 0 },
+        ] },
+    } as unknown as PaperExperimentDetail;
+    const notice = renderToStaticMarkup(createElement(PaperRunDataGaps, { detail, nowMs }));
+    expect(notice).toContain('No fresh market data · 1 market');
+    expect(notice).toContain('<b>Lighter QQQ</b> — 12 min without data · connection restored; order book requested again 2 times · open position: its exits wait for data');
+    expect(notice).not.toContain('BTC');
+    const table = renderToStaticMarkup(createElement(PaperPositionsTable, { detail }));
+    expect(table.match(/paper-gap-tag/g)).toHaveLength(1);
+    expect(table.split('paper-gap-tag')[0]).toContain('QQQ');
+    expect(renderToStaticMarkup(createElement(PaperRunDataGaps, { detail: { ...detail, status: 'completed' }, nowMs }))).toBe('');
   });
 
   it('shows individual readiness on a shared account and never copies its ready flag across missing market rows', () => {

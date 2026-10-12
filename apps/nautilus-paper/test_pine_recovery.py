@@ -40,7 +40,9 @@ async def recovery_keeps_position_and_blocks_orders():
             await asyncio.sleep(0.15)
             paused = await run.snapshot()
             assert paused["stage"] == "recovering", paused
-            assert not any(a["priceReady"] for a in paused["accounts"]), paused
+            # Only the disconnected venue pauses; Lighter keeps its prices and trading.
+            assert not accounts(paused)["Hyperliquid"]["priceReady"], paused
+            assert accounts(paused)["Lighter"]["priceReady"], paused
             for venue, account in accounts(paused).items():
                 assert account["cashBalance"] == before[venue]["cashBalance"], (venue, account)
                 assert stable_positions(account["positions"]) == stable_positions(before[venue]["positions"])
@@ -90,5 +92,43 @@ async def recovery_keeps_position_and_blocks_orders():
               "same PID/run and contiguous persisted outbox", flush=True)
 
 
+async def other_venue_trades_and_skewed_snapshot_is_accepted():
+    """A Hyperliquid gap pauses only Hyperliquid; its first post-reconnect snapshot may carry
+    a venue time slightly before our reconnect moment and is still accepted."""
+    with tempfile.TemporaryDirectory(prefix="psr-nautilus-pine-venue-gap-") as tmp:
+        run = PineRun(Path(tmp), "venue-gap", TRACKS)
+        try:
+            await run.start()
+            await run.socket("hyperliquid", "DISCONNECTED")
+            await run.wait_stage("recovering")
+            # Lighter keeps trading while Hyperliquid reconnects.
+            await run.orders("lighter", "HYPE", [ENTRY])
+            await run.wait(lambda: run.fills("entry"), "Lighter entry during the Hyperliquid gap")
+            assert run.fills("entry")[0]["venue"] == "Lighter", run.fills()
+
+            frame = {"cmd": "frame", "venue": "hyperliquid", "market": "HYPE",
+                     "bids": [["100.00", "1000.000"]], "asks": [["100.10", "1000.000"]]}
+            await run.socket("hyperliquid", "CONNECTED")
+            # Stamped 4 s before arrival: older than the reconnect allows, still rejected.
+            await run.send({**frame, "sourceLagMs": 4_000})
+            await asyncio.sleep(0.3)
+            assert run.latest_stage() == "recovering"
+            # Stamped 0.5 s before arrival (venue clock / snapshot built at subscribe): accepted.
+            await run.send({**frame, "sourceLagMs": 500})
+            await run.wait_stage("running")
+            resumed = accounts(await run.snapshot())
+            assert resumed["Hyperliquid"]["priceReady"] and resumed["Lighter"]["priceReady"], resumed
+            assert not run.failures(), run.failures()
+            await run.stop()
+        except Exception:
+            print((run.folder / "stderr.log").read_text(errors="replace")[-8000:], file=sys.stderr)
+            print(json.dumps(run.events[-30:], indent=2), file=sys.stderr)
+            raise
+        finally:
+            await run.close()
+        print("pine venue gap PASS fills", len(run.fills()), flush=True)
+
+
 if __name__ == "__main__":
     asyncio.run(recovery_keeps_position_and_blocks_orders())
+    asyncio.run(other_venue_trades_and_skewed_snapshot_is_accepted())

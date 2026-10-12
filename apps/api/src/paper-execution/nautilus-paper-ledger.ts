@@ -71,8 +71,14 @@ const SnapshotAccount = z.object({
   stalePriceObservationsSkipped: Count,
   positions: z.array(Position).max(10),
 }).strict();
+/** A market waiting for fresh data after a gap: since when, whether its venue reconnected, retries. */
+const DataGap = z.object({
+  sinceMs: z.number().int().nonnegative(),
+  connected: z.boolean(),
+  resubscribes: Count,
+}).strict();
 const SnapshotTrack = SnapshotAccount.omit({ cashBalance: true, brokerRevision: true, positions: true })
-  .extend({ market: Market }).strict();
+  .extend({ market: Market, dataGap: DataGap.optional() }).strict();
 const Message = z.discriminatedUnion('type', [
   z.object({ ...Base, type: z.literal('phase'),
     stage: z.enum(['preparing', 'warming_up', 'waiting_for_data', 'running', 'recovering', 'stopping']),

@@ -22,7 +22,10 @@ strategy can behave differently. This page lists what is tested.
 | Calculation timing | On bar close | `calc_on_every_tick`, `calc_on_order_fills` and history ticks are not supported. |
 | `process_orders_on_close` | Supported | With `strategy(process_orders_on_close=true)` market orders fill at the close of the bar that placed them, as on TradingView. |
 | `strategy.close(immediately=true)` | Supported | Fills at the close of the bar that placed it. |
-| Stop-limit, trailing stops, OCA groups, partial exits | Not supported | The minute-by-minute check rejects them before running instead of filling them wrongly. |
+| Stop-limit orders | Partial | Checked minute by minute: once the stop is reached the order becomes a limit order. It fills at the stop price when that is within the limit, otherwise when price comes back to the limit. |
+| Trailing stops | Partial | `strategy.exit` with `trail_price` or `trail_points` and `trail_offset`: armed when price reaches the level, then the stop follows the best minute price by `trail_offset` ticks. Without `trail_offset` the run stops with a message. |
+| Partial exits | Partial | `qty` / `qty_percent` in `strategy.exit` and `strategy.close`. `qty_percent` of `strategy.exit` counts from the entry size, and each `strategy.exit` id closes a trade only once, as on TradingView. |
+| OCA groups | Partial | `strategy.oca.cancel` and `strategy.oca.reduce` between `strategy.entry` / `strategy.order` orders. `strategy.exit` orders that share an OCA group with another order stop the run with a message. |
 | `request.security`, `request.security_lower_tf` | Partial | The chart's own symbol on another timeframe: candles come from the same exchange (2h, 45m and other day-dividing timeframes are built from smaller ones), checked for gaps. `lookahead_off` reads the last closed higher-timeframe bar, as on TradingView; a bar still open at the end of the period holds only candles closed by then. Another symbol, monthly and multi-day timeframes stop the run with a message. |
 | Plots and indicators on the chart | Not shown | The chart shows candles and trade markers. |
 | Data | Binance USDⓈ-M perpetuals | Gaps in the exchange data stop the backtest instead of being filled in. TradingView's own data can differ slightly. |

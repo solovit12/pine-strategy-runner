@@ -127,6 +127,18 @@ async function expectHighRunFailure(
   throw new Error(`Expected ${kind}.`);
 }
 
+type ReplayTrade = { entry_id: string; entry_price: number; exit_id?: string; exit_price?: number; size: number };
+
+/** Runs a strategy through minute replay and returns its ledger. */
+async function runHigh(source: string, parents: Candle[], sourceCandles: Candle[]) {
+  const detailization = buildHighDetailizationData(parents, sourceCandles, { tickSize: 0.01 });
+  const pine = new PineTS(parents as never, 'BINANCE:BTCUSDT', '60');
+  const evidence = attachHighBrokerReplay(pine, detailization);
+  const context = await pine.run(source) as unknown as { strategy: { opentrades: ReplayTrade[]; closedtrades: ReplayTrade[] } };
+  evidence.assertFinalPendingOrdersSupported();
+  return context;
+}
+
 describe('High H4 fail-closed safety', () => {
   it('allows required minute replay for Binance USD-M perpetual parent bars', () => {
     expect(() => assertHighRunConfiguration({
@@ -189,50 +201,90 @@ describe('High H4 fail-closed safety', () => {
     expect(error.kind).toBe('HIGH_UNSUPPORTED_SCRIPT_EXECUTION');
   });
 
-  it('F05 rejects stop-limit orders instead of approximating them', async () => {
+  it('F05 fills a stop-limit entry minute by minute after its stop is reached', async () => {
     const first = flatHour(FIXTURE_A_START, 100);
-    const second = flatHour(FIXTURE_A_START + HOUR_MS, 100);
-    await expectHighRunFailure(`
+    const second = expandHour(FIXTURE_A_START + HOUR_MS, [
+      [100, 102, 100, 102], [102, 102, 98, 98], [98, 98, 98, 98], [98, 98, 98, 98], [98, 98, 98, 98], [98, 98, 98, 98],
+    ]);
+    const context = await runHigh(`
 //@version=6
 strategy("H4 F05", overlay=false)
 if bar_index == 0
     strategy.entry("STOP_LIMIT", strategy.long, stop=101, limit=99)
-`, [first.parent, second.parent], [...first.source, ...second.source], 'HIGH_UNSUPPORTED_ORDER_FEATURE');
+`, [first.parent, second.parent], [...first.source, ...second.source]);
+    expect(context.strategy.opentrades.map((trade) => trade.entry_price)).toEqual([99]);
   });
 
-  it('F06 rejects trailing stops instead of leaving them silently pending', async () => {
+  it('F06 arms a trailing stop and fills it behind the best minute price', async () => {
     const first = flatHour(FIXTURE_A_START, 100);
-    const second = flatHour(FIXTURE_A_START + HOUR_MS, 100);
-    await expectHighRunFailure(`
+    const second = expandHour(FIXTURE_A_START + HOUR_MS, [
+      [100, 100, 100, 100], [100, 101, 100, 101], [101, 101, 100.5, 100.5], [100.5, 100.5, 100.5, 100.5],
+      [100.5, 100.5, 100.5, 100.5], [100.5, 100.5, 100.5, 100.5],
+    ]);
+    const context = await runHigh(`
 //@version=6
 strategy("H4 F06", overlay=false)
 if bar_index == 0
     strategy.entry("L", strategy.long)
     strategy.exit("TRAIL", "L", trail_points=10, trail_offset=5)
-`, [first.parent, second.parent], [...first.source, ...second.source], 'HIGH_UNSUPPORTED_ORDER_FEATURE');
+`, [first.parent, second.parent], [...first.source, ...second.source]);
+    expect(context.strategy.closedtrades.map((trade) => [trade.exit_id, trade.exit_price])).toEqual([['TRAIL', 100.95]]);
   });
 
-  it('F07 rejects partial exits instead of publishing partial-fill accounting', async () => {
+  it('rejects a trailing stop without trail_offset instead of leaving it silently pending', async () => {
     const first = flatHour(FIXTURE_A_START, 100);
     const second = flatHour(FIXTURE_A_START + HOUR_MS, 100);
     await expectHighRunFailure(`
 //@version=6
-strategy("H4 F07", overlay=false)
+strategy("H4 trail offset", overlay=false)
 if bar_index == 0
     strategy.entry("L", strategy.long)
-    strategy.exit("HALF", "L", limit=105, qty_percent=50)
+    strategy.exit("TRAIL", "L", trail_points=10)
 `, [first.parent, second.parent], [...first.source, ...second.source], 'HIGH_UNSUPPORTED_ORDER_FEATURE');
   });
 
-  it('rejects OCA order groups instead of filling siblings independently', async () => {
+  it('F07 closes qty_percent of the trade at its minute take-profit and keeps the rest open', async () => {
     const first = flatHour(FIXTURE_A_START, 100);
-    const second = flatHour(FIXTURE_A_START + HOUR_MS, 100);
-    await expectHighRunFailure(`
+    const second = expandHour(FIXTURE_A_START + HOUR_MS, [
+      [100, 106, 100, 104], [104, 104, 104, 104], [104, 104, 104, 104], [104, 104, 104, 104], [104, 104, 104, 104], [104, 104, 104, 104],
+    ]);
+    const context = await runHigh(`
+//@version=6
+strategy("H4 F07", overlay=false, default_qty_type=strategy.fixed, default_qty_value=2)
+if bar_index == 0
+    strategy.entry("L", strategy.long)
+    strategy.exit("HALF", "L", limit=105, qty_percent=50)
+`, [first.parent, second.parent], [...first.source, ...second.source]);
+    expect(context.strategy.closedtrades.map((trade) => [trade.exit_id, Math.abs(trade.size), trade.exit_price])).toEqual([['HALF', 1, 105]]);
+    expect(context.strategy.opentrades.map((trade) => Math.abs(trade.size))).toEqual([1]);
+  });
+
+  it('fills one order of an OCA cancel group and cancels its sibling', async () => {
+    const first = flatHour(FIXTURE_A_START, 100);
+    const second = expandHour(FIXTURE_A_START + HOUR_MS, [
+      [100, 102, 100, 102], [102, 102, 98, 98], [98, 98, 98, 98], [98, 98, 98, 98], [98, 98, 98, 98], [98, 98, 98, 98],
+    ]);
+    const context = await runHigh(`
 //@version=6
 strategy("H4 OCA", overlay=false)
 if bar_index == 0
     strategy.entry("UP", strategy.long, stop=101, oca_name="BREAKOUT", oca_type=strategy.oca.cancel)
     strategy.entry("DOWN", strategy.short, stop=99, oca_name="BREAKOUT", oca_type=strategy.oca.cancel)
+`, [first.parent, second.parent], [...first.source, ...second.source]);
+    expect(context.strategy.opentrades.map((trade) => [trade.entry_id, trade.entry_price])).toEqual([['UP', 101]]);
+    expect(context.strategy.closedtrades).toHaveLength(0);
+  });
+
+  it('rejects strategy.exit orders that share an OCA group', async () => {
+    const first = flatHour(FIXTURE_A_START, 100);
+    const second = flatHour(FIXTURE_A_START + HOUR_MS, 100);
+    await expectHighRunFailure(`
+//@version=6
+strategy("H4 exit OCA", overlay=false)
+if bar_index == 0
+    strategy.entry("L", strategy.long)
+    strategy.exit("A", "L", limit=110, oca_name="X")
+    strategy.exit("B", "L", stop=90, oca_name="X")
 `, [first.parent, second.parent], [...first.source, ...second.source], 'HIGH_UNSUPPORTED_ORDER_FEATURE');
   });
 

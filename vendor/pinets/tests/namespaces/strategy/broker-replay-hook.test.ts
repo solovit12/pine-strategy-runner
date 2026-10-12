@@ -94,6 +94,7 @@ describe('Strategy broker replay hook', () => {
             category: 'entry',
             qty: 2,
             hasTrailingParameters: false,
+            trailingWithoutOffset: false,
             hasOcaParameters: false,
             hasImmediateExecution: false,
         }]]);

@@ -190,6 +190,8 @@ export interface Order {
     _replay_command?: 'entry' | 'order';
     _replay_specified_qty?: number;
     _base_qty?: number;
+    // Quantity already filled by siblings of an OCA reduce group (subtracted at fill time).
+    _replay_oca_reduced?: number;
 }
 
 /**

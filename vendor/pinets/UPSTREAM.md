@@ -22,6 +22,10 @@ High replay:
 - gives stop/market orders adverse slippage;
 - orders crossings by the directed segment and gives exits priority at equal
   trigger prices;
+- replays stop-limit entries (stop activation, then a resting limit), trailing stops
+  (armed by `trail_price` / `trail_points`, following the best replay price by
+  `trail_offset`), partial exits (`qty`, `qty_percent`; one fill per trade per exit id, as
+  on parent bars) and OCA cancel / reduce groups of entry orders (added 2026-10-12);
 - emits deterministic fill/cancel audit records.
 - exposes read-only pending-order capability metadata to the product adapter;
 - reports required margin and whether each replay point would require a
@@ -35,6 +39,6 @@ To run the full upstream suite with the fork, check out the upstream tag, apply
 the fork's source changes and run `npm ci && npm test` there (2026-10-11: 2765
 passed, including the fork's tests).
 
-Gate H4 rejects stop-limit, trailing and partial-exit orders before replay and
-stops when a replay point would require a margin call. The public app continues
+Gate H4 rejects a trailing stop without `trail_offset` and `strategy.exit` orders that
+share an OCA group, and stops when a replay point would require a margin call. The public app continues
 to use Default until TradingView qualification is complete.

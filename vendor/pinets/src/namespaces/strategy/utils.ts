@@ -565,7 +565,7 @@ type ReplayCandidate = {
     order: Order;
     orderIndex: number;
     category: 'entry' | 'exit';
-    kind: 'market' | 'limit' | 'stop' | 'profit' | 'loss';
+    kind: 'market' | 'limit' | 'stop' | 'profit' | 'loss' | 'trailing';
     triggerPrice: number;
     nominalFillPrice: number;
     reason: string;
@@ -586,6 +586,34 @@ function replayMatchingTrades(strategy: StrategyState, order: Order): Trade[] {
         matching = matching.filter((t) => intended.has(t.id));
     }
     return matching;
+}
+
+/** A strategy.exit with a price leg (as opposed to a strategy.close market order). */
+function isConditionalExit(order: Order): boolean {
+    return order.profit !== undefined || order.loss !== undefined || order.limit !== undefined || order.stop !== undefined ||
+        order.trail_price !== undefined || order.trail_points !== undefined;
+}
+
+/**
+ * Trades an exit order may still close in replay. As on parent bars, a strategy.exit id fills once
+ * per trade: after `strategy.exit("tp1", "L", qty_percent = 50)` closed half of a trade, it does not
+ * close half of the rest.
+ */
+function replayExitTargets(strategy: StrategyState, order: Order): Trade[] {
+    const matching = replayMatchingTrades(strategy, order);
+    return isConditionalExit(order) ? matching.filter((t) => !t._exits_filled?.has(order.id)) : matching;
+}
+
+/** Quantity an exit order closes in total on this parent bar (qty / qty_percent caps, as on parent bars). */
+function replayExitCap(context: any, order: Order, matching: Trade[], matchingQty: number): number {
+    if (order.qty > 0) return Math.min(order.qty, matchingQty);
+    if (order.qty_percent && order.qty_percent > 0) {
+        if (!isConditionalExit(order)) return partialCloseQty(context, matchingQty, order.qty_percent);
+        // qty_percent of the trades' entry quantity (two 25% exits on 8 contracts close 2 each)
+        const entryQty = matching.reduce((sum, t) => sum + (t._entry_qty ?? Math.abs(t.size)), 0);
+        return Math.min(matchingQty, partialCloseQty(context, entryQty, order.qty_percent));
+    }
+    return matchingQty;
 }
 
 function replayPointReached(kind: 'limit' | 'stop' | 'profit' | 'loss', direction: number, price: number, level: number): boolean {
@@ -623,7 +651,11 @@ function collectReplayCandidates(
 
         if (category === 'entry') {
             if (order.bar >= context.idx) return;
-            if (order.type === 'stop-limit') return;
+            if (order.type === 'stop-limit') {
+                const candidate = replayStopLimitCandidate(order, orderIndex, point, previousPrice, gapPoint);
+                if (candidate) candidates.push(candidate);
+                return;
+            }
             if (order.type === 'market') {
                 candidates.push({ order, orderIndex, category: 'entry', kind: 'market', triggerPrice: point.price, nominalFillPrice: point.price, reason: 'market_first_eligible_tick' });
                 return;
@@ -645,21 +677,14 @@ function collectReplayCandidates(
             return;
         }
 
-        const matching = replayMatchingTrades(strategy, order);
+        const matching = replayExitTargets(strategy, order);
         if (matching.length === 0) return;
-        const isConditional =
-            order.profit !== undefined || order.loss !== undefined || order.limit !== undefined || order.stop !== undefined ||
-            order.trail_price !== undefined || order.trail_points !== undefined;
 
-        if (!isConditional) {
+        if (!isConditionalExit(order)) {
             if (order.bar >= context.idx) return;
             candidates.push({ order, orderIndex, category: 'exit', kind: 'market', triggerPrice: point.price, nominalFillPrice: point.price, reason: 'market_exit_first_eligible_tick' });
             return;
         }
-
-        // Trailing and partial exits are deliberately not executed by High
-        // v1. The H4 product adapter rejects them before replay reaches here.
-        if (order.trail_price !== undefined || order.trail_points !== undefined || order.trail_offset !== undefined) return;
 
         for (const trade of matching) {
             const dir = Math.sign(trade.size);
@@ -689,6 +714,8 @@ function collectReplayCandidates(
                 });
             }
         }
+        const trailing = replayTrailingCandidate(context, order, orderIndex, matching, point, previousPrice, gapPoint);
+        if (trailing) candidates.push(trailing);
     });
 
     const direction = previousPrice === undefined ? 0 : Math.sign(point.price - previousPrice);
@@ -701,6 +728,125 @@ function collectReplayCandidates(
         return a.order.id.localeCompare(b.order.id);
     });
     return candidates;
+}
+
+/**
+ * A stop-limit entry becomes a limit order once its stop is reached (TradingView): it fills at the
+ * activation price when that is within the limit, otherwise it rests at the limit. A replay segment
+ * is monotonic, so the limit cannot be reached later on the segment that activated it.
+ */
+function replayStopLimitCandidate(
+    order: Order,
+    orderIndex: number,
+    point: StrategyReplayPoint,
+    previousPrice: number | undefined,
+    gapPoint: boolean,
+): ReplayCandidate | undefined {
+    if (order.stop === undefined || order.limit === undefined) return undefined;
+    const dir = parseDirection(order.direction);
+    const reached = (kind: 'limit' | 'stop', level: number) => gapPoint
+        ? replayPointReached(kind, dir, point.price, level)
+        : previousPrice !== undefined && replaySegmentCrossed(kind, dir, previousPrice, point.price, level);
+    if (!order._stopTriggered) {
+        if (!reached('stop', order.stop)) return undefined;
+        order._stopTriggered = true;
+        const activation = gapPoint ? point.price : order.stop;
+        if (dir === 1 ? activation > order.limit + REPLAY_EPS : activation < order.limit - REPLAY_EPS) return undefined;
+        return { order, orderIndex, category: 'entry', kind: 'limit', triggerPrice: order.stop, nominalFillPrice: activation,
+            reason: gapPoint ? 'stop_limit_gap_activation' : 'stop_limit_activation' };
+    }
+    if (!reached('limit', order.limit)) return undefined;
+    return { order, orderIndex, category: 'entry', kind: 'limit', triggerPrice: order.limit,
+        nominalFillPrice: gapPoint ? point.price : order.limit,
+        reason: gapPoint ? 'stop_limit_gap_price_improvement' : 'stop_limit_cross' };
+}
+
+/**
+ * Trailing leg of a strategy.exit: one per order, against the trades' average entry (as on parent
+ * bars). It arms when price reaches trail_price, or trail_points ticks of profit; its stop then
+ * follows the best price by trail_offset ticks. A monotonic replay segment either moves the best
+ * price or crosses the stop, never both; a gap past the stop fills at the gap price.
+ */
+function replayTrailingCandidate(
+    context: any,
+    order: Order,
+    orderIndex: number,
+    matching: Trade[],
+    point: StrategyReplayPoint,
+    previousPrice: number | undefined,
+    gapPoint: boolean,
+): ReplayCandidate | undefined {
+    if (order.trail_offset === undefined || (order.trail_price === undefined && order.trail_points === undefined)) return undefined;
+    const mintick = context.pine?.syminfo?.mintick ?? 0.01;
+    const dir = Math.sign(matching[0].size);
+    const isLong = dir === 1;
+    if (!order.trail_armed) {
+        let armPrice = order.trail_price;
+        if (armPrice === undefined) {
+            const qty = matching.reduce((sum, t) => sum + Math.abs(t.size), 0);
+            const avgEntry = matching.reduce((sum, t) => sum + Math.abs(t.size) * t.entry_price, 0) / qty;
+            armPrice = isLong ? avgEntry + (order.trail_points as number) * mintick : avgEntry - (order.trail_points as number) * mintick;
+        }
+        if (isLong ? point.price >= armPrice - REPLAY_EPS : point.price <= armPrice + REPLAY_EPS) {
+            order.trail_armed = true;
+            order.trail_peak = point.price;
+        }
+        return undefined;
+    }
+    const peak = order.trail_peak as number;
+    const stop = isLong ? peak - order.trail_offset * mintick : peak + order.trail_offset * mintick;
+    const hit = gapPoint
+        ? replayPointReached('loss', dir, point.price, stop)
+        : previousPrice !== undefined && replaySegmentCrossed('loss', dir, previousPrice, point.price, stop);
+    if (hit) {
+        return { order, orderIndex, category: 'exit', kind: 'trailing', triggerPrice: stop,
+            nominalFillPrice: gapPoint ? point.price : stop,
+            reason: gapPoint ? 'trailing_stop_gap_worse_price' : 'trailing_stop_cross' };
+    }
+    order.trail_peak = isLong ? Math.max(peak, point.price) : Math.min(peak, point.price);
+    return undefined;
+}
+
+/**
+ * strategy.oca.cancel / strategy.oca.reduce between entry orders of one group (TradingView): a fill
+ * cancels the others, or reduces their quantity by the filled quantity.
+ */
+function applyReplayOca(
+    context: any,
+    order: Order,
+    point: StrategyReplayPoint,
+    events: StrategyReplayOrderAudit[],
+    beforeTicks: number | undefined,
+    afterTicks: number,
+): void {
+    if (!order.oca_name || (order.oca_type !== 'cancel' && order.oca_type !== 'reduce')) return;
+    const strategy: StrategyState = context.strategy;
+    const filledQty = order._base_qty ?? order.qty;
+    for (const sibling of strategy.pending_orders) {
+        if (sibling === order || sibling.status !== 'pending' || (sibling.category ?? 'entry') !== 'entry' || sibling.oca_name !== order.oca_name) continue;
+        if (order.oca_type === 'cancel') {
+            sibling.status = 'cancelled';
+        } else {
+            sibling._replay_oca_reduced = (sibling._replay_oca_reduced ?? 0) + filledQty;
+            const knownQty = sibling._replay_command ? sibling._replay_specified_qty : sibling.qty;
+            if (knownQty !== undefined && Number.isFinite(knownQty) && knownQty > 0 && knownQty - sibling._replay_oca_reduced <= REPLAY_EPS) {
+                sibling.status = 'cancelled';
+            }
+        }
+        if (sibling.status !== 'cancelled') continue;
+        events.push({
+            eventType: 'cancel',
+            orderId: sibling.id,
+            category: 'entry',
+            parentBarIndex: context.idx,
+            replaySequence: point.replaySequence,
+            replayOpenTime: point.replayOpenTime ?? point.time,
+            stage: point.stage ?? 'external',
+            ...(beforeTicks === undefined ? {} : { priceBeforeTicks: beforeTicks }),
+            priceAfterTicks: afterTicks,
+            reason: 'oca_sibling_filled',
+        });
+    }
 }
 
 function updateReplayTradeExcursions(context: any, price: number): void {
@@ -724,7 +870,9 @@ function executeReplayEntry(context: any, candidate: ReplayCandidate, point: Str
     if (candidate.kind === 'market' || candidate.kind === 'stop') fillPrice = applySlippage(context, direction, fillPrice);
 
     if (order._replay_command) {
-        const baseQty = calculateOrderQty(context, order._replay_specified_qty, direction, fillPrice);
+        const sizedQty = calculateOrderQty(context, order._replay_specified_qty, direction, fillPrice);
+        // An OCA reduce group already filled part of this order's quantity.
+        const baseQty = order._replay_oca_reduced ? floorQty(context, sizedQty - order._replay_oca_reduced) : sizedQty;
         order._base_qty = baseQty;
         order.qty = order._replay_command === 'entry' && strategy.position_size !== 0 && Math.sign(strategy.position_size) !== direction
             ? Math.abs(strategy.position_size) + baseQty
@@ -766,15 +914,31 @@ function executeReplayEntry(context: any, candidate: ReplayCandidate, point: Str
     return 'fill';
 }
 
-function executeReplayExit(context: any, candidate: ReplayCandidate, point: StrategyReplayPoint): 'fill' | 'cancel' | 'skip' {
+/**
+ * `replay` (minute replay) follows the parent-bar exit rules: the qty / qty_percent cap is set per
+ * parent bar and a strategy.exit fills once per trade. `external` (Paper fills) keeps the cap
+ * across fills, since a partial real fill leaves the rest of the exit working.
+ */
+function executeReplayExit(
+    context: any,
+    candidate: ReplayCandidate,
+    point: StrategyReplayPoint,
+    mode: 'replay' | 'external' = 'external',
+): 'fill' | 'cancel' | 'skip' {
     const strategy: StrategyState = context.strategy;
     const order = candidate.order;
-    const matching = replayMatchingTrades(strategy, order);
+    const targets = () => mode === 'replay' ? replayExitTargets(strategy, order) : replayMatchingTrades(strategy, order);
+    const matching = targets();
     if (matching.length === 0) return 'skip';
     const matchingQty = matching.reduce((sum, trade) => sum + Math.abs(trade.size), 0);
     const matchingDir = Math.sign(matching[0].size);
     let capRemaining = (order as any)._replay_remaining_qty as number | undefined;
-    if (capRemaining === undefined) {
+    if (mode === 'replay') {
+        if (capRemaining === undefined || (order as any)._replay_cap_bar !== context.idx) {
+            capRemaining = replayExitCap(context, order, matching, matchingQty);
+            (order as any)._replay_cap_bar = context.idx;
+        }
+    } else if (capRemaining === undefined) {
         capRemaining = matchingQty;
         if (order.qty > 0) capRemaining = Math.min(order.qty, matchingQty);
         else if (order.qty_percent && order.qty_percent > 0) capRemaining = matchingQty * order.qty_percent / 100;
@@ -785,13 +949,19 @@ function executeReplayExit(context: any, candidate: ReplayCandidate, point: Stra
     }
 
     const target = candidate.specificTradeId ? matching.find((trade) => trade.id === candidate.specificTradeId) : undefined;
+    // This trade's bracket leg lost its trade to an earlier fill on the same point.
+    if (candidate.specificTradeId && !target) return 'skip';
     const qty = Math.min(capRemaining, target ? Math.abs(target.size) : matchingQty);
     let fillPrice = candidate.nominalFillPrice;
-    if (candidate.kind === 'market' || candidate.kind === 'loss') fillPrice = applySlippage(context, -matchingDir, fillPrice);
-    const triggerKind = candidate.kind === 'profit' ? 'profit' : candidate.kind === 'loss' ? 'loss' : null;
+    if (candidate.kind === 'market' || candidate.kind === 'loss' || candidate.kind === 'trailing') fillPrice = applySlippage(context, -matchingDir, fillPrice);
+    const triggerKind = candidate.kind === 'profit' || candidate.kind === 'loss' || candidate.kind === 'trailing' ? candidate.kind : null;
     const exitComment = candidate.kind === 'profit'
         ? (order.comment_profit ?? order.comment)
-        : candidate.kind === 'loss' ? (order.comment_loss ?? order.comment) : order.comment;
+        : candidate.kind === 'loss' ? (order.comment_loss ?? order.comment)
+        : candidate.kind === 'trailing' ? (order.comment_trailing ?? order.comment) : order.comment;
+    const sizesBefore = mode === 'replay' && isConditionalExit(order)
+        ? new Map(matching.map((trade) => [trade, Math.abs(trade.size)]))
+        : undefined;
 
     closeMatching(context, order.from_entry, qty, fillPrice, point.time, {
         triggerKind,
@@ -800,7 +970,11 @@ function executeReplayExit(context: any, candidate: ReplayCandidate, point: Stra
     }, candidate.specificTradeId);
     capRemaining -= qty;
     (order as any)._replay_remaining_qty = capRemaining;
-    const stillMatching = replayMatchingTrades(strategy, order).reduce((sum, trade) => sum + Math.abs(trade.size), 0);
+    // Trades this order reduced: it (and a later call with its id) no longer applies to them.
+    for (const [trade, before] of sizesBefore ?? []) {
+        if (Math.abs(trade.size) < before - REPLAY_EPS) (trade._exits_filled ??= new Set()).add(order.id);
+    }
+    const stillMatching = targets().reduce((sum, trade) => sum + Math.abs(trade.size), 0);
     if (capRemaining <= REPLAY_EPS || stillMatching <= REPLAY_EPS) order.status = 'filled';
     order.fill_price = fillPrice;
     order.fill_bar = context.idx;
@@ -869,7 +1043,7 @@ export function processStrategyReplayPoint(
             if (order.status !== 'pending') continue;
             const outcome = candidate.category === 'entry'
                 ? executeReplayEntry(context, candidate, point)
-                : executeReplayExit(context, candidate, point);
+                : executeReplayExit(context, candidate, point, 'replay');
             if (outcome === 'skip') continue;
             if (candidate.category === 'entry' && outcome === 'fill') filledEntry = true;
             eventOrderIds.add(order.id);
@@ -889,6 +1063,7 @@ export function processStrategyReplayPoint(
                 triggerPrice: candidate.triggerPrice,
                 reason: outcome === 'cancel' ? 'risk_or_margin_rejected' : candidate.reason,
             });
+            if (outcome === 'fill' && candidate.category === 'entry') applyReplayOca(context, order, point, events, beforeTicks, afterTicks);
         }
         if (!filledEntry) break;
     }
@@ -897,7 +1072,7 @@ export function processStrategyReplayPoint(
     // that are still waiting for a pending entry remain alive.
     for (const order of strategy.pending_orders) {
         if (order.status !== 'pending' || (order.category ?? 'entry') !== 'exit') continue;
-        if (replayMatchingTrades(strategy, order).length > 0) continue;
+        if (replayExitTargets(strategy, order).length > 0) continue;
         const waitingEntry = strategy.pending_orders.some((candidate) =>
             candidate.status === 'pending' && (candidate.category ?? 'entry') === 'entry' &&
             (!order.from_entry || candidate.id === order.from_entry));

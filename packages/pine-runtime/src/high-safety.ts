@@ -96,28 +96,18 @@ export function assertHighRunConfiguration(configuration: HighRunConfiguration):
   }
 }
 
-/** Reject order shapes for which High v1 does not yet define exact fills. */
+/**
+ * Reject order shapes for which minute replay does not define exact fills. Stop-limit orders,
+ * trailing stops, partial exits and OCA groups of entry orders are replayed minute by minute.
+ */
 export function assertHighPendingOrdersSupported(orders: readonly StrategyBrokerPendingOrder[]): void {
   for (const order of orders) {
-    if (order.type === 'stop-limit') {
+    if (order.trailingWithoutOffset) {
       throw new HighSafetyError(
         'HIGH_UNSUPPORTED_ORDER_FEATURE',
-        `High v1 не поддерживает stop-limit ордер ${order.id}.`,
-        { orderId: order.id, feature: 'stop-limit' },
-      );
-    }
-    if (order.hasTrailingParameters) {
-      throw new HighSafetyError(
-        'HIGH_UNSUPPORTED_ORDER_FEATURE',
-        `High v1 не поддерживает trailing stop в ордере ${order.id}.`,
-        { orderId: order.id, feature: 'trailing-stop' },
-      );
-    }
-    if (order.hasOcaParameters) {
-      throw new HighSafetyError(
-        'HIGH_UNSUPPORTED_ORDER_FEATURE',
-        `Минутный replay не поддерживает OCA-группу в ордере ${order.id}.`,
-        { orderId: order.id, feature: 'oca-group' },
+        `Trailing stop ${order.id} has no trail_offset, so it would never trigger; add trail_offset. / `
+          + `У трейлинг-стопа ${order.id} нет trail_offset, он никогда не сработает; добавьте trail_offset.`,
+        { orderId: order.id, feature: 'trailing-without-offset' },
       );
     }
     if (order.hasImmediateExecution) {
@@ -127,11 +117,13 @@ export function assertHighPendingOrdersSupported(orders: readonly StrategyBroker
         { orderId: order.id, feature: 'immediate-execution' },
       );
     }
-    if (order.category === 'exit' && (order.qty > 0 || order.qtyPercent !== undefined)) {
+    if (order.category === 'exit' && order.ocaName
+      && orders.some((other) => other !== order && other.ocaName === order.ocaName)) {
       throw new HighSafetyError(
         'HIGH_UNSUPPORTED_ORDER_FEATURE',
-        `High v1 не поддерживает частичное закрытие в ордере ${order.id}.`,
-        { orderId: order.id, feature: 'partial-exit', qty: order.qty, qtyPercent: order.qtyPercent },
+        `strategy.exit ${order.id} shares the OCA group "${order.ocaName}" with another order; this is not supported yet. / `
+          + `strategy.exit ${order.id} делит OCA-группу "${order.ocaName}" с другой заявкой; это пока не поддерживается.`,
+        { orderId: order.id, feature: 'exit-oca-group', ocaName: order.ocaName },
       );
     }
   }

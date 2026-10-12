@@ -61,7 +61,11 @@ export interface StrategyBrokerPendingOrder {
     qty: number;
     qtyPercent?: number;
     hasTrailingParameters: boolean;
+    /** trail_price or trail_points without trail_offset: the trailing stop never works. */
+    trailingWithoutOffset: boolean;
     hasOcaParameters: boolean;
+    ocaName?: string;
+    ocaType?: 'cancel' | 'reduce' | 'none';
     hasImmediateExecution: boolean;
 }
 
@@ -1420,9 +1424,14 @@ export class PineTS {
                             order.trail_price !== undefined
                             || order.trail_points !== undefined
                             || order.trail_offset !== undefined,
+                        trailingWithoutOffset:
+                            (order.trail_price !== undefined || order.trail_points !== undefined)
+                            && order.trail_offset === undefined,
                         hasOcaParameters:
                             (typeof order.oca_name === 'string' && order.oca_name.length > 0)
                             || (order.oca_type !== undefined && order.oca_type !== 'none'),
+                        ...(typeof order.oca_name === 'string' && order.oca_name.length > 0 ? { ocaName: order.oca_name } : {}),
+                        ...(order.oca_type === undefined ? {} : { ocaType: order.oca_type }),
                         hasImmediateExecution: order.immediately === true,
                     }));
             },

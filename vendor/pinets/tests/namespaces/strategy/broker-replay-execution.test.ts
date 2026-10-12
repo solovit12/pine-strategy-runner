@@ -415,3 +415,146 @@ if bar_index == 0
         expect(first.events[0]).toMatchObject({ parentBarIndex: 1, replaySequence: 24, replayOpenTime: T0 + HOUR, stage: 'open' });
     });
 });
+
+describe('High replay stop-limit, trailing, partial and OCA orders', () => {
+    const fills = (events: { eventType: string; orderId: string; fillPrice?: number; reason: string }[]) =>
+        events.filter((event) => event.eventType === 'fill').map((event) => [event.orderId, event.fillPrice, event.reason]);
+
+    it('fills a stop-limit at its activation price within the limit, without slippage', async () => {
+        const { events } = await replay(`
+//@version=6
+${declaration(', slippage=5')}
+if bar_index == 0
+    strategy.order("L", strategy.long, qty=1, stop=105, limit=106)
+`, { 1: [{ stage: 'open', price: 100 }, { stage: 'high', price: 110 }] });
+        expect(fills(events)).toEqual([['L', 105, 'stop_limit_activation']]);
+    });
+
+    it('rests a stop-limit at its limit after activation and fills when price comes back', async () => {
+        const below = await replay(`
+//@version=6
+${declaration()}
+if bar_index == 0
+    strategy.order("L", strategy.long, qty=1, stop=105, limit=103)
+`, { 1: [{ stage: 'open', price: 100 }, { stage: 'high', price: 110 }, { stage: 'low', price: 102 }] });
+        expect(fills(below.events)).toEqual([['L', 103, 'stop_limit_cross']]);
+
+        const gap = await replay(`
+//@version=6
+${declaration()}
+if bar_index == 0
+    strategy.order("L", strategy.long, qty=1, stop=105, limit=106)
+`, {
+            1: [{ stage: 'open', price: 108 }, { stage: 'high', price: 109 }],
+            2: [{ stage: 'open', price: 107 }, { stage: 'low', price: 104 }],
+        });
+        expect(fills(gap.events)).toEqual([['L', 106, 'stop_limit_cross']]);
+        expect(gap.events.find((event) => event.eventType === 'fill')?.parentBarIndex).toBe(2);
+    });
+
+    it('arms a trailing stop at trail_points profit and fills it trail_offset behind the best price', async () => {
+        const source = `
+//@version=6
+${declaration(', slippage=2')}
+if bar_index == 0
+    strategy.entry("L", strategy.long)
+    strategy.exit("T", "L", trail_points=100, trail_offset=50)
+`;
+        const sameBar = await replay(source, {
+            1: [{ stage: 'open', price: 100 }, { stage: 'high', price: 103 }, { stage: 'low', price: 101 }],
+        });
+        expect(fills(sameBar.events)).toEqual([['L', 100.02, 'market_first_eligible_tick'], ['T', 102.48, 'trailing_stop_cross']]);
+
+        const carried = await replay(source, {
+            1: [{ stage: 'open', price: 100 }, { stage: 'high', price: 103 }, { stage: 'close', price: 102.8 }],
+            2: [{ stage: 'open', price: 104 }, { stage: 'low', price: 103.4 }],
+        });
+        expect(fills(carried.events).at(-1)).toEqual(['T', 103.48, 'trailing_stop_cross']);
+
+        const gapped = await replay(source, {
+            1: [{ stage: 'open', price: 100 }, { stage: 'high', price: 103 }, { stage: 'close', price: 102.8 }],
+            2: [{ stage: 'open', price: 102 }],
+        });
+        expect(fills(gapped.events).at(-1)).toEqual(['T', 101.98, 'trailing_stop_gap_worse_price']);
+    });
+
+    it('never arms a trailing stop before price reaches trail_price', async () => {
+        const { events, context } = await replay(`
+//@version=6
+${declaration()}
+if bar_index == 0
+    strategy.entry("L", strategy.long)
+    strategy.exit("T", "L", trail_price=110, trail_offset=100)
+`, { 1: [{ stage: 'open', price: 100 }, { stage: 'high', price: 109 }, { stage: 'low', price: 90 }] });
+        expect(fills(events)).toEqual([['L', 100, 'market_first_eligible_tick']]);
+        expect(context.strategy.position_size).toBe(1);
+    });
+
+    it('closes qty_percent of the entry once per trade, and the rest with another exit', async () => {
+        const { context } = await replay(`
+//@version=6
+${declaration()}
+if bar_index == 0
+    strategy.entry("L", strategy.long, qty=4)
+if strategy.position_size > 0 or bar_index == 0
+    strategy.exit("tp1", "L", qty_percent=50, limit=110)
+    strategy.exit("tp2", "L", limit=120)
+`, {
+            1: [{ stage: 'open', price: 100 }, { stage: 'high', price: 111 }, { stage: 'close', price: 105 }],
+            2: [{ stage: 'open', price: 105 }, { stage: 'high', price: 115 }, { stage: 'close', price: 112 }],
+            3: [{ stage: 'open', price: 112 }, { stage: 'high', price: 121 }],
+        }, [parent(0), parent(1), parent(2), parent(3)]);
+        expect(context.strategy.closedtrades.map((trade: any) => [trade.exit_id, Math.abs(trade.size), trade.exit_price]))
+            .toEqual([['tp1', 2, 110], ['tp2', 2, 120]]);
+        expect(context.strategy.position_size).toBe(0);
+    });
+
+    it('closes qty_percent of the current position with strategy.close', async () => {
+        const { context } = await replay(`
+//@version=6
+${declaration()}
+if bar_index == 0
+    strategy.entry("L", strategy.long, qty=4)
+if bar_index == 1
+    strategy.close("L", qty_percent=25)
+`, { 1: [{ stage: 'open', price: 100 }], 2: [{ stage: 'open', price: 101 }] });
+        expect(context.strategy.position_size).toBe(3);
+        expect(context.strategy.closedtrades.map((trade: any) => [Math.abs(trade.size), trade.exit_price])).toEqual([[1, 101]]);
+    });
+
+    it('cancels the other orders of a strategy.oca.cancel group when one fills', async () => {
+        const { events, context } = await replay(`
+//@version=6
+${declaration()}
+if bar_index == 0
+    strategy.entry("Up", strategy.long, stop=105, oca_name="brk", oca_type=strategy.oca.cancel)
+    strategy.entry("Down", strategy.short, stop=95, oca_name="brk", oca_type=strategy.oca.cancel)
+`, { 1: [{ stage: 'open', price: 100 }, { stage: 'high', price: 106 }, { stage: 'low', price: 94 }] });
+        expect(fills(events)).toEqual([['Up', 105, 'stop_cross']]);
+        expect(events.find((event) => event.orderId === 'Down')).toMatchObject({ eventType: 'cancel', reason: 'oca_sibling_filled' });
+        expect(context.strategy.position_size).toBe(1);
+    });
+
+    it('reduces the other orders of a strategy.oca.reduce group by the filled quantity', async () => {
+        const partly = await replay(`
+//@version=6
+${declaration()}
+if bar_index == 0
+    strategy.order("A", strategy.long, qty=2, limit=99, oca_name="r", oca_type=strategy.oca.reduce)
+    strategy.order("B", strategy.long, qty=3, limit=98, oca_name="r", oca_type=strategy.oca.reduce)
+`, { 1: [{ stage: 'open', price: 100 }, { stage: 'low', price: 97 }] });
+        expect(fills(partly.events)).toEqual([['A', 99, 'limit_cross'], ['B', 98, 'limit_cross']]);
+        expect(partly.context.strategy.position_size).toBe(3);
+
+        const fully = await replay(`
+//@version=6
+${declaration()}
+if bar_index == 0
+    strategy.order("A", strategy.long, qty=2, limit=99, oca_name="r", oca_type=strategy.oca.reduce)
+    strategy.order("B", strategy.long, qty=2, limit=98, oca_name="r", oca_type=strategy.oca.reduce)
+`, { 1: [{ stage: 'open', price: 100 }, { stage: 'low', price: 97 }] });
+        expect(fills(fully.events)).toEqual([['A', 99, 'limit_cross']]);
+        expect(fully.events.find((event) => event.orderId === 'B')).toMatchObject({ eventType: 'cancel', reason: 'oca_sibling_filled' });
+        expect(fully.context.strategy.position_size).toBe(2);
+    });
+});

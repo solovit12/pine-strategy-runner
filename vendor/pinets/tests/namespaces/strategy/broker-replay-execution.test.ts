@@ -558,3 +558,24 @@ if bar_index == 0
         expect(fully.context.strategy.position_size).toBe(2);
     });
 });
+
+describe('strategy.exit without any price leg', () => {
+    it('places no order while its levels are na, instead of closing at the next open', async () => {
+        const { events, context } = await replay(`
+//@version=6
+${declaration()}
+if bar_index == 0
+    strategy.entry("S", strategy.short, qty=4)
+level = bar_index >= 2 ? strategy.position_avg_price - 10 : na
+if strategy.position_size < 0
+    strategy.exit("TP", "S", qty_percent=50, limit=level, stop=level + 20)
+`, {
+            1: [{ stage: 'open', price: 100 }],
+            2: [{ stage: 'open', price: 101 }, { stage: 'close', price: 101 }],
+            3: [{ stage: 'open', price: 100 }, { stage: 'low', price: 89 }],
+        }, [parent(0), parent(1), parent(2), parent(3)]);
+        expect(events.filter((event) => event.eventType === 'fill').map((event) => [event.orderId, event.parentBarIndex, event.fillPrice]))
+            .toEqual([['S', 1, 100], ['TP', 3, 90]]);
+        expect(context.strategy.position_size).toBe(-2);
+    });
+});

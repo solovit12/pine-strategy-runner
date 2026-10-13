@@ -142,6 +142,12 @@ export function exit(context: any) {
         const isPersistent = lastBarForSite !== undefined && lastBarForSite === context.idx - 1;
         history.set(callsiteId, context.idx);
 
+        // An exit whose every price leg is na (e.g. levels from an indicator still warming up)
+        // places no order on this bar, as on TradingView. Without a leg it would otherwise read as
+        // a market close and close qty_percent of the position at every next open.
+        const isSet = (v: any) => v !== undefined && v !== null && !(typeof v === 'number' && Number.isNaN(v));
+        if (![profit, limit, loss, stop, trailPrice, trailPoints].some(isSet)) return;
+
         const order: Order = {
             id: idValue ?? 'exit',
             direction: 0,           // resolved at trigger based on matching trades

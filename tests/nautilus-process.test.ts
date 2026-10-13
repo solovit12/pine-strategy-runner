@@ -32,6 +32,10 @@ describe('Nautilus log lines that stop a Paper run', () => {
       + 'Received transport error, terminating: transport error: Invalid close code: 1012\u001b[0m';
     expect(isFatalNautilusLogLine(lighterRestart)).toBe(false);
     expect(isFatalNautilusLogLine('[ERROR] PSR-PAPER-001.nautilus_execution::engine: order rejected unexpectedly')).toBe(true);
+    // Run 8da27e00 (2026-10-13): a resubscribe cancelled Lighter's own pending subscription.
+    expect(isFatalNautilusLogLine('\u001b[1m2026-10-13T00:55:41.279544664Z\u001b[0m \u001b[1;31m[ERROR] PSR-PAPER-001.nautilus_lighter::data: '
+      + 'Failed to subscribe to Lighter book deltas: Client("subscription cancelled before venue acknowledgement: order_book:39")\u001b[0m')).toBe(false);
+    expect(isFatalNautilusLogLine('[ERROR] PSR-PAPER-001.nautilus_lighter::data: Failed to subscribe to Lighter book deltas: Client("invalid market")')).toBe(true);
     expect(isFatalNautilusLogLine('Traceback (most recent call last):')).toBe(true);
     expect(isFatalNautilusLogLine('InvalidStateTrigger: RUNNING -> START')).toBe(true);
     expect(isFatalNautilusLogLine('[WARN] PSR-PAPER-001.nautilus_lighter::websocket::handler: Lighter WS unparsed frame')).toBe(false);

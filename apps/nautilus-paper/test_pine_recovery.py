@@ -55,7 +55,13 @@ async def recovery_keeps_position_and_blocks_orders():
             await run.socket("hyperliquid", "CONNECTED")
             await run.prices(("100.00", "100.10"))
             await run.wait_stage("running")
-            resumed = accounts(await run.snapshot())
+            # The run resumes on Hyperliquid's first fresh book; Lighter's fresh quote from the same
+            # batch can land a moment later, so wait for both instead of racing the snapshot.
+            for _ in range(60):
+                resumed = accounts(await run.snapshot())
+                if all(a["priceReady"] for a in resumed.values()):
+                    break
+                await asyncio.sleep(0.05)
             assert all(a["priceReady"] for a in resumed.values()), resumed
             assert stable_positions(resumed["Lighter"]["positions"]) == stable_positions(before["Lighter"]["positions"])
             assert Decimal(resumed["Lighter"]["cashBalance"]) == Decimal(before["Lighter"]["cashBalance"])

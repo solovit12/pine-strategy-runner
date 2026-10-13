@@ -991,12 +991,19 @@ export async function buildApp(options: BuildAppOptions = {}) {
                 'Внутри самой минуты путь цены остаётся детерминированной моделью OHLC из четырёх точек.',
               ),
             ]
-          : [
-              bilingualMessage(
-                'No sub-minute candles are available on the 1m timeframe; the minute uses a deterministic four-point OHLC path.',
-                'На таймфрейме 1m нет доступных субминутных свечей: внутри минуты используется детерминированный путь OHLC из четырёх точек.',
-              ),
-            ]),
+          : parsed.data.timeframe === '1m'
+            ? [
+                bilingualMessage(
+                  'No sub-minute candles are available on the 1m timeframe; the minute uses a deterministic four-point OHLC path.',
+                  'На таймфрейме 1m нет доступных субминутных свечей: внутри минуты используется детерминированный путь OHLC из четырёх точек.',
+                ),
+              ]
+            : [
+                bilingualMessage(
+                  `Bar detail: 4 points per ${parsed.data.timeframe} candle, as TradingView's Default without Bar Magnifier. Inside the candle price moves open → nearer extreme → farther extreme → close; minute candles were not used.`,
+                  `Детализация: 4 точки на свечу ${parsed.data.timeframe}, как Default в TradingView без Bar Magnifier. Внутри свечи цена идёт: открытие → ближний экстремум → дальний → закрытие; минутные свечи не использовались.`,
+                ),
+              ]),
         parsed.data.exchange === 'Binance'
           ? bilingualMessage(
               `Pine syminfo.mintick = ${precision.mintick} and syminfo.mincontract = ${precision.minContract} from Binance Futures filters.`,

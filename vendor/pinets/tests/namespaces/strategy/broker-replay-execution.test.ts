@@ -579,3 +579,53 @@ if strategy.position_size < 0
         expect(context.strategy.position_size).toBe(-2);
     });
 });
+
+describe('OCA groups on parent bars (no minute replay)', () => {
+    const run = async (type: string) => {
+        const bars = [parent(0, 100, 101, 99, 100), parent(1, 100, 106, 99, 104), parent(2, 104, 105, 94, 95)];
+        const pine = new PineTS(bars, 'TEST', '60');
+        return pine.run(`
+//@version=6
+${declaration()}
+if bar_index == 0
+    strategy.order("Up", strategy.long, qty=2, stop=105, oca_name="brk", oca_type=${type})
+    strategy.order("Down", strategy.short, qty=3, stop=95, oca_name="brk", oca_type=${type})
+`) as Promise<any>;
+    };
+
+    it('cancels the other entries of a strategy.oca.cancel group once one fills', async () => {
+        const context = await run('strategy.oca.cancel');
+        expect(context.strategy.opentrades.map((trade: any) => [trade.entry_id, trade.size])).toEqual([['Up', 2]]);
+        expect(context.strategy.closedtrades).toHaveLength(0);
+    });
+
+    it('reduces the other entries of a strategy.oca.reduce group by the filled quantity', async () => {
+        const context = await run('strategy.oca.reduce');
+        expect(context.strategy.position_size).toBe(1);
+    });
+});
+
+describe('trailing stop re-sent every bar (parent bars)', () => {
+    const run = async (offset: string) => {
+        const bars = [parent(0, 100, 100.5, 99.5, 100), parent(1, 100, 106, 99.5, 105), parent(2, 105, 105.5, 103.5, 104)];
+        const pine = new PineTS(bars, 'TEST', '60');
+        return pine.run(`
+//@version=6
+${declaration()}
+if bar_index == 0
+    strategy.entry("L", strategy.long)
+strategy.exit("T", "L", trail_points=500, trail_offset=${offset})
+`) as Promise<any>;
+    };
+
+    it('keeps the best price while its parameters stay the same', async () => {
+        const context = await run('200');
+        expect(context.strategy.closedtrades.map((trade: any) => [trade.exit_id, trade.exit_price, trade.exit_bar_index])).toEqual([['T', 104, 2]]);
+    });
+
+    it('starts again from the current bar when the offset changes, as TradingView does', async () => {
+        const context = await run('bar_index == 1 ? 300 : 200');
+        expect(context.strategy.closedtrades).toHaveLength(0);
+        expect(context.strategy.position_size).toBe(1);
+    });
+});

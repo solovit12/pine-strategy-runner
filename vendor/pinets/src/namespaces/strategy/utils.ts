@@ -453,6 +453,7 @@ function fillEntryOrder(context: any, order: Order, fillPrice: number, currentTi
                     order.fill_price = fillPrice;
                     order.fill_bar = context.idx;
                     order.fill_time = currentTime;
+                    applyBarOca(strategy, order);
                 } else {
                     order.status = 'cancelled';
                 }
@@ -467,6 +468,24 @@ function fillEntryOrder(context: any, order: Order, fillPrice: number, currentTi
     order.fill_price = fillPrice;
     order.fill_bar = context.idx;
     order.fill_time = currentTime;
+    applyBarOca(strategy, order);
+}
+
+/**
+ * strategy.oca.cancel / strategy.oca.reduce on parent bars: a filled entry cancels the other
+ * entry orders of its group, or reduces them by its quantity (as in minute replay).
+ */
+function applyBarOca(strategy: StrategyState, order: Order): void {
+    if (!order.oca_name || (order.oca_type !== 'cancel' && order.oca_type !== 'reduce')) return;
+    for (const sibling of strategy.pending_orders) {
+        if (sibling === order || sibling.status !== 'pending' || (sibling.category ?? 'entry') !== 'entry' || sibling.oca_name !== order.oca_name) continue;
+        if (order.oca_type === 'cancel') {
+            sibling.status = 'cancelled';
+            continue;
+        }
+        sibling.qty = Math.max(0, sibling.qty - order.qty);
+        if (sibling.qty <= 1e-9) sibling.status = 'cancelled';
+    }
 }
 
 /**

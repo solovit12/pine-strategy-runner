@@ -207,7 +207,13 @@ export function exit(context: any) {
             if (o.category === 'exit' && o.id === exitId &&
                 (o.from_entry ?? '') === (order.from_entry ?? '') &&
                 o.status === 'pending') {
-                if (o.trail_armed) {
+                // Only an unchanged trailing stop keeps its state. New trail_price / trail_points /
+                // trail_offset values replace it with a new trailing stop that arms again: on
+                // TradingView an exit re-sent each bar with an ATR-based offset tracks the best
+                // price from its own bar (BINANCE:BTCUSDT.P 1h export, 2026-08-18 01:00 exit).
+                const sameTrail = o.trail_price === order.trail_price && o.trail_points === order.trail_points
+                    && o.trail_offset === order.trail_offset;
+                if (o.trail_armed && sameTrail) {
                     order.trail_armed = true;
                     order.trail_peak  = o.trail_peak;
                 }

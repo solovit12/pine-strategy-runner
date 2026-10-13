@@ -47,7 +47,9 @@ run should continue: a stopped computer or Docker interrupts it.
 2. **Backtest tab.** Choose the Binance market, timeframe and dates, enter your
    commission per fill (for example `0.05` %) and press **Run Backtest**. The chart,
    the results and every trade appear below. Strategy Properties work like the
-   *Properties* tab of TradingView's Strategy Tester.
+   *Properties* tab of TradingView's Strategy Tester. **Bar Detail** checks orders on
+   every minute inside each candle; choose *4 points per bar* to reproduce
+   TradingView's default (free account) results.
 3. **Paper tab.** Choose the timeframe, the starting balance per exchange, the
    order size and up to 10 markets on each exchange, then press **Start Paper**.
    The strategy is saved and starts trading with virtual money. A backtest first is

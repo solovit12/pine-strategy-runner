@@ -106,14 +106,13 @@ const BacktestRequestInputSchema = z.object({
       message: 'Percent commission must be between zero and 100',
     });
   }
-  const expectedDetailization = value.timeframe === '1m' ? 'default' : 'high';
-  if (value.barDetailization !== undefined && value.barDetailization !== expectedDetailization) {
+  // Above 1m both models run: minute replay (default) or the parent candle's own four-point
+  // path, as TradingView's Default without Bar Magnifier. 1m has no smaller source candles.
+  if (value.timeframe === '1m' && value.barDetailization === 'high') {
     context.addIssue({
       code: 'custom',
       path: ['barDetailization'],
-      message: value.timeframe === '1m'
-        ? '1m uses the native minute OHLC path because no sub-minute source is available'
-        : 'Timeframes above 1m require automatic minute replay',
+      message: '1m uses the native minute OHLC path because no sub-minute source is available',
     });
   }
   if (value.timeframe === '1w') {
@@ -135,7 +134,7 @@ export const BacktestRequestSchema = BacktestRequestInputSchema.transform((value
   ...value,
   baseCurrency: (value.baseCurrency ?? (value.exchange === 'Binance' ? 'USDT' : 'USDC')) as 'USDT' | 'USDC',
   feeModel: (value.feeModel ?? (value.exchange === 'Binance' ? 'manual' : 'venue_default_all_taker_v1')) as 'manual' | 'venue_default_all_taker_v1',
-  barDetailization: (value.timeframe === '1m' ? 'default' : 'high') as 'default' | 'high',
+  barDetailization: (value.timeframe === '1m' ? 'default' : value.barDetailization ?? 'high') as 'default' | 'high',
 }));
 
 export type BacktestRequest = z.infer<typeof BacktestRequestSchema>;

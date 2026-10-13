@@ -11,7 +11,7 @@ export function backtestSettingsSupportedByEditor(settings: StrategyBacktestSett
     && (settings.baseCurrency === undefined || settings.baseCurrency === 'USDT')
     && settings.feeModel === 'manual'
     && settings.commissionType === 'percent'
-    && (settings.barDetailization === undefined || settings.barDetailization === (settings.timeframe === '1m' ? 'default' : 'high'))
+    && (settings.barDetailization !== 'high' || settings.timeframe !== '1m')
     && settings.calcOnOrderFills === false
     && settings.calcOnEveryTick === false
     && settings.calcOnEveryHistoryTick === false

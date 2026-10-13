@@ -26,6 +26,8 @@ const EditorDraftSchema = z.object({
   shortLeverage: z.string(),
   slippageTicks: z.number(),
   processOrdersOnClose: z.boolean(),
+  /** Bar detail model; drafts saved before it existed use minute replay. */
+  barDetail: z.enum(['high', 'default']).optional(),
   strategyName: z.string(),
   /** The saved strategy the editor was opened from, if any. */
   strategyId: z.string().nullable(),

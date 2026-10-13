@@ -50,6 +50,7 @@ type EditorSnapshot = {
   shortLeverage: string;
   slippageTicks: number;
   processOrdersOnClose: boolean;
+  barDetail: BarDetail;
   strategyName: string;
   selectedStrategyId: string;
   loadedStrategy: StrategyDetail | null;
@@ -67,6 +68,8 @@ function pageFromPath(): AppPage {
   return 'backtest';
 }
 type OrderSizeType = 'fixed' | 'cash' | 'percent_of_equity';
+/** `high`: every order checked on each minute candle; `default`: the candle's own 4-point path (TradingView's Default). */
+type BarDetail = 'high' | 'default';
 const DEFAULT_PAPER_SETTINGS: PaperStrategySettings = {
   accountModel: 'pine_live_v1',
   timeframe: '1h',
@@ -184,6 +187,7 @@ export function App() {
   const [shortLeverage, setShortLeverage] = useState('Auto');
   const [slippageTicks, setSlippageTicks] = useState(0);
   const [processOrdersOnClose, setProcessOrdersOnClose] = useState(false);
+  const [barDetail, setBarDetail] = useState<BarDetail>('high');
   const [result, setResult] = useState<BacktestResponse | null>(null);
   const [state, setState] = useState<RunState>('loading-preset');
   const [error, setError] = useState('');
@@ -243,12 +247,12 @@ export function App() {
     if (!draftRestored.current) return;
     const timer = window.setTimeout(() => writeEditorDraft({
       source, symbol, timeframe, startDate, endDate, initialCapital, defaultOrderSizeValue, defaultOrderSizeType,
-      pyramiding, commissionValueInput, longLeverage, shortLeverage, slippageTicks, processOrdersOnClose, strategyName,
+      pyramiding, commissionValueInput, longLeverage, shortLeverage, slippageTicks, processOrdersOnClose, barDetail, strategyName,
       strategyId: loadedStrategy?.strategy.id ?? null,
     }), 300);
     return () => window.clearTimeout(timer);
   }, [source, symbol, timeframe, startDate, endDate, initialCapital, defaultOrderSizeValue, defaultOrderSizeType, pyramiding,
-    commissionValueInput, longLeverage, shortLeverage, slippageTicks, processOrdersOnClose, strategyName, loadedStrategy, state]);
+    commissionValueInput, longLeverage, shortLeverage, slippageTicks, processOrdersOnClose, barDetail, strategyName, loadedStrategy, state]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -335,7 +339,7 @@ export function App() {
   const currentRequest = (commissionFallback?: number): BacktestRequest => {
     const marginLongPercent = leverageToMarginPercent(longLeverage, { en: 'Long leverage', ru: 'Плечо для лонга' });
     const marginShortPercent = leverageToMarginPercent(shortLeverage, { en: 'Short leverage', ru: 'Плечо для шорта' });
-    const barDetailization = timeframe === '1m' ? 'default' : 'high';
+    const barDetailization: BarDetail = timeframe === '1m' ? 'default' : barDetail;
     const dateWindowError = backtestDateWindowError(startDate, endDate);
     const normalizedCommission = commissionValueInput.trim() === '' && commissionFallback !== undefined
       ? String(commissionFallback) : commissionValueInput.trim().replace(',', '.');
@@ -451,6 +455,7 @@ export function App() {
     setShortLeverage(settings.marginShortPercent === undefined ? 'Auto' : formatLeverage(settings.marginShortPercent));
     setSlippageTicks(settings.slippageTicks);
     setProcessOrdersOnClose(settings.processOrdersOnClose ?? strategyDeclarationProperties(detail.version.source).processOrdersOnClose ?? false);
+    setBarDetail(settings.timeframe !== '1m' && settings.barDetailization === 'default' ? 'default' : 'high');
     setResult(null);
     setLastBacktestedRequest(null);
     setError('');
@@ -473,6 +478,7 @@ export function App() {
     setShortLeverage(draft.shortLeverage);
     setSlippageTicks(draft.slippageTicks);
     setProcessOrdersOnClose(draft.processOrdersOnClose);
+    setBarDetail(draft.barDetail ?? 'high');
     setStrategyName(draft.strategyName);
     if (draft.source !== templateSource) setCatalogMessage('The editor was restored from your last visit.');
     if (!draft.strategyId) return;
@@ -504,6 +510,7 @@ export function App() {
     setShortLeverage(previousEditor.shortLeverage);
     setSlippageTicks(previousEditor.slippageTicks);
     setProcessOrdersOnClose(previousEditor.processOrdersOnClose);
+    setBarDetail(previousEditor.barDetail);
     setStrategyName(previousEditor.strategyName);
     setSelectedStrategyId(previousEditor.selectedStrategyId);
     setLoadedStrategy(previousEditor.loadedStrategy);
@@ -540,7 +547,7 @@ export function App() {
     const snapshot: EditorSnapshot = {
       source, symbol, timeframe, startDate, endDate, initialCapital,
       defaultOrderSizeValue, defaultOrderSizeType, pyramiding, commissionValueInput,
-      longLeverage, shortLeverage, slippageTicks, processOrdersOnClose, strategyName, selectedStrategyId,
+      longLeverage, shortLeverage, slippageTicks, processOrdersOnClose, barDetail, strategyName, selectedStrategyId,
       loadedStrategy, paperStrategy, result, lastBacktestedRequest, state, error,
     };
     setPreviousEditors((items) => [...items, snapshot].slice(-3));
@@ -813,6 +820,7 @@ export function App() {
               <label><span>Long Leverage <InfoTooltip label="long leverage" en="Auto reads margin_long from the Pine code." ru="Auto берёт margin_long из Pine-кода." /></span><input value={longLeverage} onChange={(event) => setLongLeverage(event.target.value)} placeholder="Auto / Infinity / 20" disabled={state === 'running'} /></label>
               <label><span>Short Leverage <InfoTooltip label="short leverage" en="20 means 5% margin; Infinity means 0%." ru="20 означает маржу 5%; Infinity означает 0%." /></span><input value={shortLeverage} onChange={(event) => setShortLeverage(event.target.value)} placeholder="Auto / Infinity / 20" disabled={state === 'running'} /></label>
               <label><span>Slippage <InfoTooltip label="slippage" en="Price worsening applied to market and stop orders." ru="Ухудшение цены для рыночных и стоп-заявок." /></span><div className="input-suffix"><input type="number" min="0" step="1" value={slippageTicks} onChange={(event) => setSlippageTicks(Number(event.target.value))} disabled={state === 'running'} /><span>ticks</span></div></label>
+              <label><span>Bar Detail <InfoTooltip label="bar detail" en="How orders are checked inside each candle. Every minute: stops, take-profits and limits are checked on every one-minute candle inside it, the most accurate model. 4 points per bar: only open, high, low and close, in the order open → nearer extreme → farther extreme → close. This repeats TradingView's Default bar detailization on a free account (no Bar Magnifier); use it to compare with TradingView. On 1m there are no smaller candles, so 4 points is the only model." ru="Как проверяются заявки внутри каждой свечи. Every minute: стопы, тейки и лимитные заявки проверяются по каждой минутной свече внутри неё — самая точная модель. 4 points per bar: только открытие, максимум, минимум и закрытие в порядке открытие → ближний экстремум → дальний → закрытие. Это повторяет детализацию Default в TradingView на бесплатном аккаунте (без Bar Magnifier); удобно для сверки с TradingView. На 1m меньших свечей нет, поэтому там только 4 точки." /></span><select value={timeframe === '1m' ? 'default' : barDetail} onChange={(event) => setBarDetail(event.target.value as BarDetail)} disabled={state === 'running' || timeframe === '1m'}><option value="high">Every minute (most accurate)</option><option value="default">4 points per bar — as TradingView free (Default)</option></select></label>
               <label className="property-checkbox"><input type="checkbox" checked={processOrdersOnClose} onChange={(event) => setProcessOrdersOnClose(event.target.checked)} disabled={state === 'running'} /><span>Fill Orders on Bar Close <InfoTooltip label="fill orders on bar close" en="Like TradingView's Properties → Fill orders: On bar close. Market orders fill at the close of the candle that placed them instead of the next candle's open. Starts from process_orders_on_close in the script's strategy(...)." ru="Как в TradingView: Properties → Fill orders: On bar close. Рыночные заявки исполняются по закрытию свечи, на которой они выставлены, а не на открытии следующей. Начальное значение берётся из process_orders_on_close в strategy(...) скрипта." /></span></label>
             </div>
           </section>

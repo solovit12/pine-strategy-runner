@@ -62,8 +62,11 @@ describe('BacktestRequest minute detailization contract', () => {
     expect(BacktestRequestSchema.parse({ ...base, timeframe: '1m' }).barDetailization).toBe('default');
   });
 
-  it('does not let callers bypass minute replay above 1m', () => {
-    expect(BacktestRequestSchema.safeParse({ ...base, barDetailization: 'default' }).success).toBe(false);
+  it('uses minute replay above 1m unless the four-point model (TradingView Default) is chosen', () => {
+    const { barDetailization: _omitted, ...withoutDetail } = base as typeof base & { barDetailization?: string };
+    expect(BacktestRequestSchema.parse(withoutDetail).barDetailization).toBe('high');
+    expect(BacktestRequestSchema.parse({ ...base, barDetailization: 'default' }).barDetailization).toBe('default');
+    expect(BacktestRequestSchema.parse({ ...base, barDetailization: 'high' }).barDetailization).toBe('high');
   });
 
   it('does not accept meaningless High detailization at 1m', () => {

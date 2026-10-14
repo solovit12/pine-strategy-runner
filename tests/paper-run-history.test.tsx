@@ -179,7 +179,8 @@ describe('Paper run activity', () => {
     expect(html).toContain('0.09x'); // 10 × 90 / (10012.5 + 8.1)
     expect(html).toContain('Total PnL <b class="paper-pnl-up">+20.60 (+0.21%)</b>');
     expect(html).toContain('Total PnL <b class="paper-pnl-down">−10.00 (−0.10%)</b>');
-    expect(html).toContain('No open positions');
+    // The exchange is named once, in its summary row above.
+    expect(html).toContain('<tr><td colSpan="8" class="paper-positions-none">No open positions</td></tr>');
     expect(html).not.toContain('Diff');
   });
 

@@ -433,7 +433,8 @@ tbody tr:hover { background: #141a1c; }
 /* Open positions by exchange (Paper run detail) */
 .paper-positions-table td, .paper-positions-table th { white-space: nowrap; }
 .paper-positions-venue td { background: #141b1e; border-top: 1px solid #334044; }
-.paper-positions-venue td { display: table-cell; }
+.paper-positions-venue td { display: table-cell; white-space: normal; }
+.paper-positions-venue strong, .paper-positions-venue span { display: inline-block; white-space: nowrap; }
 .paper-positions-venue strong { margin-right: 18px; color: #eef4f5; }
 .paper-positions-venue span { margin-right: 18px; color: var(--muted); font-size: 12px; }
 .paper-positions-venue b { margin-left: 6px; color: #d8e1e3; font-weight: 600; }
@@ -486,3 +487,7 @@ tbody tr:hover { background: #141a1c; }
 .paper-xyz-notice { display: flex; gap: 10px; align-items: flex-start; margin-top: 14px; padding: 11px 13px; border: 1px solid #6b5527; background: #1d1910; color: #f0dfb9; font-size: 13px; line-height: 1.5; }
 .paper-xyz-notice > svg { flex: none; margin-top: 2px; color: var(--amber); }
 .paper-xyz-notice strong { display: block; color: #ffe2a8; }
+
+/* Paper Runs: every run slot is taken — information, not a failure. */
+.paper-slots-note { display: flex; gap: 9px; align-items: center; margin-bottom: 16px; padding: 10px 14px; border: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+.paper-slots-note > svg { flex: none; color: var(--muted); }

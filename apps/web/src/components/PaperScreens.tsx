@@ -23,6 +23,12 @@ type Timeframe = typeof PINE_LIVE_TIMEFRAMES[number];
 const VENUES: readonly Venue[] = ['Hyperliquid', 'Lighter'];
 const MAX_PER_VENUE = 10;
 /** Public base-tier perpetual fees (percent); editable before launch. */
+/** Markets of a new run in both editions (the owner's standard set); a saved strategy keeps its own. */
+export const DEFAULT_PAPER_MARKETS: Readonly<Record<'Hyperliquid' | 'Lighter', readonly string[]>> = {
+  Hyperliquid: ['xyz:XYZ100', 'xyz:CL', 'xyz:BRENTOIL', 'xyz:NVDA', 'xyz:SP500', 'xyz:SILVER', 'xyz:SNDK', 'xyz:MU', 'xyz:SKHX', 'xyz:SKHY'],
+  Lighter: ['HYPE', 'SOL', 'XRP', 'SUI', 'DOGE', 'LIT', '1000SHIB', 'ADA', 'QQQ', 'PUMP'],
+};
+
 export const DEFAULT_PAPER_FEES = {
   hyperliquidMakerFeePercent: 0.015, hyperliquidTakerFeePercent: 0.045,
   lighterMakerFeePercent: 0, lighterTakerFeePercent: 0,
@@ -64,6 +70,14 @@ export function baseMarket(symbol: string | undefined): string | null {
   if (!symbol) return null;
   const base = symbol.toUpperCase().replace(/[-_:/.].*$/, '').replace(/(USDT|USDC|USD|PERP)$/, '');
   return PAPER_MARKET_SYMBOL_PATTERN.test(base) ? base : null;
+}
+
+type FeeFields = Record<keyof typeof DEFAULT_PAPER_FEES, string>;
+
+/** Empty fee fields (e.g. in a draft saved before defaults existed) get the exchange's standard fee. */
+function withDefaultFees(fees: FeeFields): FeeFields {
+  const entries = Object.entries(DEFAULT_PAPER_FEES) as Array<[keyof typeof DEFAULT_PAPER_FEES, number]>;
+  return Object.fromEntries(entries.map(([key, fee]) => [key, fees[key].trim() === '' ? String(fee) : fees[key]])) as FeeFields;
 }
 
 export function paperSettingsEqual(a: LiveSettings, b: unknown): boolean {
@@ -245,7 +259,6 @@ export function PaperSetupPreview({ source, fromBacktest, fromEditor = fromBackt
     ? Object.fromEntries(Object.entries(initial.params).map(([name, value]) => [name, String(value)])) : {}));
   const defaultTimeframe: Timeframe = (PINE_LIVE_TIMEFRAMES as readonly string[]).includes(backtestTimeframe ?? '')
     ? backtestTimeframe as Timeframe : '1h';
-  const defaultMarket = baseMarket(backtestSymbol);
   const [sourceChoice, setSourceChoice] = useState<'saved' | 'editor'>(embedded || startsFromEditor ? 'editor' : 'saved');
   // Opened directly (not from a backtest), the screen waits for the last-run strategy, which
   // the app loads in the background, unless the user already chose something themselves.
@@ -257,12 +270,12 @@ export function PaperSetupPreview({ source, fromBacktest, fromEditor = fromBackt
   }, [savedStrategy]);
   const [timeframe, setTimeframe] = useState<Timeframe>(restored?.timeframe ?? initial?.timeframe ?? defaultTimeframe);
   const [tracks, setTracks] = useState<Record<Venue, string[]>>(() => restored?.tracks ?? ({
-    Hyperliquid: initial ? initial.tracks.filter((t) => t.venue === 'Hyperliquid').map((t) => t.market) : defaultMarket ? [defaultMarket] : [],
-    Lighter: initial ? initial.tracks.filter((t) => t.venue === 'Lighter').map((t) => t.market) : defaultMarket ? [defaultMarket] : [],
+    Hyperliquid: initial ? initial.tracks.filter((t) => t.venue === 'Hyperliquid').map((t) => t.market) : [...DEFAULT_PAPER_MARKETS.Hyperliquid],
+    Lighter: initial ? initial.tracks.filter((t) => t.venue === 'Lighter').map((t) => t.market) : [...DEFAULT_PAPER_MARKETS.Lighter],
   }));
   const [capital, setCapital] = useState(restored?.capital ?? String(initial?.capitalPerVenue ?? 10_000));
   const [orderSize, setOrderSize] = useState(restored?.orderSize ?? String(initial?.orderSizePercent ?? 10));
-  const [fees, setFees] = useState(() => restored?.fees ?? ({
+  const [fees, setFees] = useState(() => restored ? withDefaultFees(restored.fees) : ({
     hyperliquidMakerFeePercent: String(initial?.hyperliquidMakerFeePercent ?? DEFAULT_PAPER_FEES.hyperliquidMakerFeePercent),
     hyperliquidTakerFeePercent: String(initial?.hyperliquidTakerFeePercent ?? DEFAULT_PAPER_FEES.hyperliquidTakerFeePercent),
     lighterMakerFeePercent: String(initial?.lighterMakerFeePercent ?? DEFAULT_PAPER_FEES.lighterMakerFeePercent),
@@ -325,10 +338,11 @@ export function PaperSetupPreview({ source, fromBacktest, fromEditor = fromBackt
     setCapital(String(settings.capitalPerVenue));
     setOrderSize(String(settings.orderSizePercent));
     setFees({
-      hyperliquidMakerFeePercent: String(settings.hyperliquidMakerFeePercent ?? ''),
-      hyperliquidTakerFeePercent: String(settings.hyperliquidTakerFeePercent ?? ''),
-      lighterMakerFeePercent: String(settings.lighterMakerFeePercent ?? ''),
-      lighterTakerFeePercent: String(settings.lighterTakerFeePercent ?? ''),
+      // A strategy saved without fees gets each exchange's standard fee, not an empty field.
+      hyperliquidMakerFeePercent: String(settings.hyperliquidMakerFeePercent ?? DEFAULT_PAPER_FEES.hyperliquidMakerFeePercent),
+      hyperliquidTakerFeePercent: String(settings.hyperliquidTakerFeePercent ?? DEFAULT_PAPER_FEES.hyperliquidTakerFeePercent),
+      lighterMakerFeePercent: String(settings.lighterMakerFeePercent ?? DEFAULT_PAPER_FEES.lighterMakerFeePercent),
+      lighterTakerFeePercent: String(settings.lighterTakerFeePercent ?? DEFAULT_PAPER_FEES.lighterTakerFeePercent),
     });
   };
 

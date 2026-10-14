@@ -68,6 +68,8 @@ export interface PaperExperimentCapabilities {
   readonly maxTracksPerVenue: number;
   readonly maxTracksPerExperiment: number;
   readonly maxConcurrentExperiments: number;
+  /** Runs holding a slot now; with maxConcurrentExperiments it explains a full server calmly. */
+  readonly activeExperiments?: number;
   /** Optional server-enforced pilot market subset; absent for the general draft. */
   readonly allowedMarkets?: readonly string[];
 }

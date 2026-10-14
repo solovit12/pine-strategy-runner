@@ -1,3 +1,4 @@
+import { DEFAULT_PAPER_MARKETS } from '../apps/web/src/components/PaperScreens';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
@@ -67,7 +68,7 @@ describe('generic Pine Paper setup', () => {
     expect(setup).toMatch(/<button[^>]*disabled=""[^>]*>Start Paper<\/button>/); // until the server admits Paper
   });
 
-  it('prefills the backtested editor code with the backtest market on both exchanges', () => {
+  it('prefills the backtested editor code with the standard market set and fees', () => {
     const setup = renderToStaticMarkup(createElement(PaperSetupPreview, {
       source: 'strategy("Fresh idea")', fromBacktest: true, backtestTimeframe: '5m', backtestSymbol: 'SOLUSDT',
       strategies: [], savedStrategy: null, catalogBusy: false, ...callbacks,
@@ -75,7 +76,11 @@ describe('generic Pine Paper setup', () => {
     expect(setup).toContain('Fresh idea');
     expect(setup).toContain('Current editor (just backtested)');
     expect(setup).toContain('<option value="5m" selected="">5m</option>');
-    expect((setup.match(/<span>SOL<\/span>/g) ?? []).length).toBe(2);
+    for (const market of [...DEFAULT_PAPER_MARKETS.Hyperliquid, ...DEFAULT_PAPER_MARKETS.Lighter]) {
+      expect(setup).toContain(`<span>${market}</span>`);
+    }
+    expect(setup).toContain('20 markets');
+    expect(setup).toContain('value="0.045"');
     expect(setup).toContain('Start saves this Pine code and these settings to the strategy library');
     // A preselected saved Python strategy must not replace the just-backtested editor code.
     const python = { ...settings, accountModel: 'python_live_v1' as const, strategyRef: 'examples/ema_cross:EmaCross',
@@ -89,7 +94,7 @@ describe('generic Pine Paper setup', () => {
     expect(fromEditor).toContain('<option value="pine" selected="">Pine code</option>');
     expect(fromEditor).toContain('Current editor (just backtested)');
     expect(fromEditor).toContain('<option value="15m" selected="">15m</option>');
-    expect((fromEditor.match(/<span>HYPE<\/span>/g) ?? []).length).toBe(2);
+    expect(fromEditor).toContain('20 markets');
     expect(fromEditor).not.toContain('kPEPE');
     // Paper without a backtest: the editor page still leads, without the "just backtested" label.
     const notBacktested = renderToStaticMarkup(createElement(PaperSetupPreview, {

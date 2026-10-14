@@ -156,6 +156,7 @@ export class PaperExperimentControllerV1 {
       maxTracksPerVenue: this.#factory?.admissionLimits?.maxTracksPerVenue ?? 10,
       maxTracksPerExperiment: this.#factory?.admissionLimits?.maxTracksPerExperiment ?? 20,
       maxConcurrentExperiments: MAX_CONCURRENT_PAPER_EXPERIMENTS,
+      activeExperiments: this.#store?.activeExperimentCount() ?? 0,
       ...(this.#factory?.admissionLimits?.allowedMarkets
         ? { allowedMarkets: this.#factory.admissionLimits.allowedMarkets } : {}),
     };

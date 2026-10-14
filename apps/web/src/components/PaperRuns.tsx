@@ -144,7 +144,7 @@ export function PaperPositionsTable({ detail }: { detail: PaperExperimentDetail 
           <span>Total PnL <b className={pnlClass(total)}>{signedNumber(total)} ({signedNumber(account.startingCash ? total / account.startingCash * 100 : 0)}%)</b></span>
         </td></tr>
         {positions.length === 0
-          ? <tr><td>{account.venue}</td><td colSpan={7} className="paper-positions-none">No open positions</td></tr>
+          ? <tr><td colSpan={8} className="paper-positions-none">No open positions</td></tr>
           : positions.map((position) => {
             const size = Number(position.remainingBaseQuantity);
             const mark = position.markPrice === undefined ? null : Number(position.markPrice);
@@ -376,7 +376,9 @@ export function PaperRuns({ onPrepare }: { onPrepare: () => void }) {
         <div><span className="eyebrow">PAPER / RUNS</span><h1 id="paper-runs-title">Paper Runs <InfoTooltip label="paper runs page" en="This page reads server-owned experiments and refreshes reported status every five seconds. Each exchange has one shared virtual account; market rows have separate status but do not own separate balances. Closing the browser does not stop an admitted experiment." ru="Страница читает серверные эксперименты и обновляет статус каждые пять секунд. У каждой биржи один общий виртуальный счёт; у строк рынков отдельный статус, но нет отдельного баланса. Закрытие браузера не останавливает принятый эксперимент." /></h1></div>
         <button className="paper-text-button" type="button" onClick={onPrepare}>Prepare experiment <ArrowRight size={15} /></button>
       </div>
-      {capabilities && !capabilities.available && <div className="paper-preview-notice" role="status"><AlertTriangle size={18} /><div><strong>New launches unavailable.</strong><span> {capabilities.reason || 'The server has not enabled Paper admission.'}</span></div></div>}
+      {capabilities && !capabilities.available && (capabilities.activeExperiments ?? 0) >= capabilities.maxConcurrentExperiments
+        ? <div className="paper-slots-note" role="status"><Clock3 size={16} /><span>{capabilities.activeExperiments} of {capabilities.maxConcurrentExperiments} runs are active. To start a new one, stop one of them.</span></div>
+        : capabilities && !capabilities.available && <div className="paper-preview-notice" role="status"><AlertTriangle size={18} /><div><strong>New launches unavailable.</strong><span> {capabilities.reason || 'The server has not enabled Paper admission.'}</span></div></div>}
       {refreshError && <div className="paper-preview-notice" role="alert"><AlertTriangle size={18} /><div><strong>Status refresh failed.</strong><span> Try Refresh now. {lastRefreshedAt && `Last complete refresh: ${formatDate(lastRefreshedAt)}.`}</span></div></div>}
       {stopError && <div className="paper-preview-notice" role="alert"><AlertTriangle size={18} /><div><strong>Stop was not confirmed by the server.</strong><span> This run may still occupy the active slot. Refresh its status before trying again.</span></div></div>}
       <div className="paper-runs-toolbar"><span>{lastRefreshedAt ? `Last updated ${formatDate(lastRefreshedAt)} · automatic refresh every 5 seconds` : 'Waiting for the first server response…'}</span><button className="paper-text-button" type="button" onClick={() => setRefreshToken((value) => value + 1)}>Refresh now</button></div>

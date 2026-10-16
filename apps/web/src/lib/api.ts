@@ -7,8 +7,8 @@ import type {
   StrategySummary,
 } from '../../../../packages/shared/src/strategy-catalog-contracts';
 import type {
-  PaperExperimentActivity, PaperExperimentCapabilities, PaperExperimentDetail, PaperExperimentSummary,
-  StartPaperExperimentRequest,
+  LiveConnectionCheck, LiveSettingsView, PaperExperimentActivity, PaperExperimentCapabilities, PaperExperimentDetail,
+  PaperExperimentSummary, SaveLiveSettingsRequest, StartPaperExperimentRequest,
 } from '../../../../packages/shared/src/paper-experiment-contracts';
 
 export type PaperCapabilities = PaperExperimentCapabilities;
@@ -193,4 +193,25 @@ export async function stopPaperExperiment(id: string): Promise<PaperExperimentDe
     method: 'POST',
   }));
   return result.experiment;
+}
+
+export async function loadLiveSettings(signal?: AbortSignal): Promise<LiveSettingsView> {
+  return (await parse<{ settings: LiveSettingsView }>(await fetch('/api/live/settings', { signal }))).settings;
+}
+
+/** The API private key is sent once and stored on the machine that runs the engine; it never comes back. */
+export async function saveLiveSettings(input: SaveLiveSettingsRequest): Promise<LiveSettingsView> {
+  return (await parse<{ settings: LiveSettingsView }>(await fetch('/api/live/settings', {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(input),
+  }))).settings;
+}
+
+export async function removeLiveKey(): Promise<LiveSettingsView> {
+  return (await parse<{ settings: LiveSettingsView }>(await fetch('/api/live/settings/key', { method: 'DELETE' }))).settings;
+}
+
+export async function checkLiveConnection(): Promise<LiveConnectionCheck> {
+  return (await parse<{ check: LiveConnectionCheck }>(await fetch('/api/live/check', { method: 'POST' }))).check;
 }

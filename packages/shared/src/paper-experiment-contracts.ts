@@ -62,6 +62,50 @@ export type PaperExperimentTrackStatus = PaperExperimentStatus;
 /** Independent Paper experiments one API may run at once (each is its own Nautilus process). */
 export const MAX_CONCURRENT_PAPER_EXPERIMENTS = 2;
 
+/** Exchanges Live trading can connect to. */
+export const LIVE_EXCHANGES = ['lighter'] as const;
+
+/**
+ * Live trading settings sent by the setup page. The API private key is write-only: the server
+ * stores it on the machine that runs the engine and never returns it. Omitted: the saved key stays.
+ */
+export const SaveLiveSettingsSchema = z.object({
+  exchange: z.enum(LIVE_EXCHANGES),
+  enabled: z.boolean(),
+  accountIndex: z.number().int().min(0).max(281_474_976_710_655),
+  /** Lighter reserves 0–3 for its own apps; API keys use 4–254. */
+  apiKeyIndex: z.number().int().min(4).max(254),
+  apiKey: z.string().max(400).optional(),
+}).strict();
+
+export type SaveLiveSettingsRequest = z.infer<typeof SaveLiveSettingsSchema>;
+
+export interface LiveSettingsView {
+  readonly exchange: typeof LIVE_EXCHANGES[number];
+  /** Live mode switched on by the owner. */
+  readonly enabled: boolean;
+  readonly accountIndex: number | null;
+  readonly apiKeyIndex: number | null;
+  /** A key is stored (its value is never returned). */
+  readonly keySaved: boolean;
+  /** 'app': saved from this page; 'server': a file the server operator placed. */
+  readonly keySource: 'app' | 'server' | null;
+  /** The server operator switched Live off (PSR_LIVE_DISABLED=1). */
+  readonly disabledByServer: boolean;
+}
+
+/** Read-only connection check of the saved Lighter account (no orders). */
+export interface LiveConnectionCheck {
+  readonly ok: boolean;
+  readonly balance: string | null;
+  readonly openPositions: number;
+  readonly openOrders: number;
+  readonly error: string | null;
+}
+
+/** Only one Live run at a time: two engines would share one Lighter account and API key. */
+export const LIVE_ALREADY_ACTIVE_MESSAGE = 'A LIVE run is already active. Stop it before starting another LIVE run.';
+
 export interface PaperExperimentCapabilities {
   readonly available: boolean;
   readonly reason: string | null;
@@ -72,6 +116,10 @@ export interface PaperExperimentCapabilities {
   readonly activeExperiments?: number;
   /** Optional server-enforced pilot market subset; absent for the general draft. */
   readonly allowedMarkets?: readonly string[];
+  /** Live trading with real money on Lighter is enabled on this engine (full edition, PSR_LIVE_ENABLED=1). */
+  readonly liveTrading?: boolean;
+  /** A Live run is active: only one at a time (one Lighter account and API key). */
+  readonly liveActive?: boolean;
 }
 
 export interface PaperExperimentTrack {
@@ -115,6 +163,8 @@ export interface PaperExperimentSummary {
   readonly markets?: readonly PaperExperimentTrack['market'][];
   readonly timeframe?: PaperStrategySettings['timeframe'];
   readonly capitalPerVenue?: number | null;
+  /** True for a Live run (real orders on Lighter). */
+  readonly live?: boolean;
 }
 
 export interface PaperExperimentDetail extends PaperExperimentSummary {

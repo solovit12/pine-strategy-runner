@@ -1,5 +1,6 @@
 import { pineCodeError } from '../../../../packages/pine-runtime/src/pine-errors.js';
 import {
+  LIVE_ALREADY_ACTIVE_MESSAGE,
   MAX_CONCURRENT_PAPER_EXPERIMENTS,
   type PaperExperimentCapabilities,
   type PaperExperimentDetail,
@@ -105,6 +106,7 @@ export class PaperExperimentControllerV1 {
   readonly #factory: PaperExperimentRuntimeFactory | null;
   readonly #catalogConfigured: boolean;
   readonly #pythonStrategies: boolean;
+  readonly #liveTrading: () => boolean;
   #otherLiveOwnerReason: string | null = null;
   readonly #managed = new Map<string, ManagedExperiment>();
 
@@ -115,11 +117,15 @@ export class PaperExperimentControllerV1 {
     readonly now?: () => number;
     /** False in the Pine-only public edition. */
     readonly pythonStrategies?: boolean;
+    /** Live trading with real money: full edition with PSR_LIVE_ENABLED=1 on this engine. */
+    readonly liveTrading?: boolean | (() => boolean);
   }) {
     this.#store = options.directory ? new PaperExperimentStoreV1(options.directory, options.now) : null;
     this.#factory = options.runtimeFactory ?? null;
     this.#catalogConfigured = options.catalogConfigured;
     this.#pythonStrategies = options.pythonStrategies ?? true;
+    const live = options.liveTrading ?? false;
+    this.#liveTrading = typeof live === 'function' ? live : () => live;
     if (this.#store) {
       try {
         // The previous process may have died after taking a Gateway batch.
@@ -157,6 +163,8 @@ export class PaperExperimentControllerV1 {
       maxTracksPerExperiment: this.#factory?.admissionLimits?.maxTracksPerExperiment ?? 20,
       maxConcurrentExperiments: MAX_CONCURRENT_PAPER_EXPERIMENTS,
       activeExperiments: this.#store?.activeExperimentCount() ?? 0,
+      liveTrading: this.#liveTrading(),
+      liveActive: Boolean(this.#store?.activeLiveExperimentId()),
       ...(this.#factory?.admissionLimits?.allowedMarkets
         ? { allowedMarkets: this.#factory.admissionLimits.allowedMarkets } : {}),
     };
@@ -197,6 +205,9 @@ export class PaperExperimentControllerV1 {
     if (request.settings.accountModel !== savedModel) {
       throw new PaperExperimentControllerError('SOURCE_VERSION_CONFLICT', 'Paper launch settings differ from the saved version. Save the changes as a new version before launch.');
     }
+    if ('live' in request.settings && request.settings.live && !this.#liveTrading()) {
+      throw new PaperExperimentControllerError('UNSUPPORTED_STRATEGY', 'Live trading is not enabled on this engine.');
+    }
     const nativeRefusal = savedModel === 'venue_shared_v2'
       ? nativeLaunchRefusal({ sourceSha256: saved.version.sourceSha256, origin: saved.version.metadata.origin },
         request.settings.tracks.map(({ market }) => market))
@@ -234,6 +245,9 @@ export class PaperExperimentControllerV1 {
         throw new PaperExperimentControllerError('PAPER_EXPERIMENT_LIMIT', 'The earlier launch is still stopping; its execution owner has not been proven closed.', prior);
       }
       return { experiment: prior, existing: true };
+    }
+    if ('live' in request.settings && request.settings.live && this.#store.activeLiveExperimentId()) {
+      throw new PaperExperimentControllerError('PAPER_EXPERIMENT_LIMIT', LIVE_ALREADY_ACTIVE_MESSAGE);
     }
     if (JSON.stringify(saved.version.paperSettings) !== JSON.stringify(request.settings)) {
       throw new PaperExperimentControllerError('SOURCE_VERSION_CONFLICT', 'Paper launch settings differ from the saved version. Save the changes as a new version before launch.');

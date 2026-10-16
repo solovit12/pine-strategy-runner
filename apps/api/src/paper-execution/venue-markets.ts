@@ -36,11 +36,13 @@ const MAX_BODY_BYTES = 8 * 1024 * 1024;
 /**
  * Public request budget per rolling minute, below each venue's published IP limit so that
  * several markets can be requested at once when a bar closes. Lighter allows 60 requests per
- * minute without an account (https://apidocs.lighter.xyz/docs/rate-limits); Hyperliquid 1200
+ * minute without an account (https://apidocs.lighter.xyz/docs/rate-limits) for the whole server
+ * IP: the candles here keep 35, leaving room for a Live engine's position check (6 a minute) and
+ * the Nautilus Lighter clients' own requests at start and after a reconnect. Hyperliquid 1200
  * weight per minute, a small candle or info request weighing about 20.
  */
 const BUDGET: Record<PaperVenueKey, { readonly max: number; readonly windowMs: number }> = {
-  lighter: { max: 45, windowMs: 60_000 }, hyperliquid: { max: 40, windowMs: 60_000 },
+  lighter: { max: 35, windowMs: 60_000 }, hyperliquid: { max: 40, windowMs: 60_000 },
 };
 const LIGHTER_PAGE = 500;
 const HYPERLIQUID_PAGE = 5_000;

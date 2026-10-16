@@ -4,11 +4,11 @@ import { readPaperDraft, writePaperDraft } from '../lib/editor-draft';
 import { isXyzMarket } from '../lib/stock-hours';
 import { XyzHoursNotice } from './XyzHoursNotice';
 import {
-  PAPER_MARKET_SYMBOL_PATTERN, PINE_LIVE_TIMEFRAMES, pythonStrategyRef,
+  LIVE_MAX_EXCHANGE_STOP_PERCENT, LIVE_MAX_LEVERAGE, PAPER_MARKET_SYMBOL_PATTERN, PINE_LIVE_TIMEFRAMES, pythonStrategyRef,
   type PineLivePaperSettingsV1, type PythonLivePaperSettingsV1, type StrategyDetail, type StrategySummary,
 } from '../../../../packages/shared/src/strategy-catalog-contracts';
 import {
-  PineLivePaperLaunchSettingsV1Schema, PythonLivePaperLaunchSettingsV1Schema,
+  LIVE_ALREADY_ACTIVE_MESSAGE, PineLivePaperLaunchSettingsV1Schema, PythonLivePaperLaunchSettingsV1Schema,
 } from '../../../../packages/shared/src/paper-experiment-contracts';
 import {
   ApiResponseError, createPaperExperiment, loadPaperCapabilities, loadPaperMarkets, loadPythonStrategies, loadStrategy, loadVenueVolumes,
@@ -16,7 +16,8 @@ import {
 } from '../lib/api';
 import { findSavedPythonStrategy } from '../lib/python-strategy-library';
 import { InfoTooltip } from './TranslatedText';
-import { EDITION, pythonStrategiesAvailable, type Edition } from '../../../../packages/shared/src/edition';
+import { LiveSettingsPanel } from './LiveSettings';
+import { EDITION, liveTradingAvailable, pythonStrategiesAvailable, type Edition } from '../../../../packages/shared/src/edition';
 
 type Venue = 'Hyperliquid' | 'Lighter';
 type Timeframe = typeof PINE_LIVE_TIMEFRAMES[number];
@@ -88,7 +89,12 @@ export function paperSettingsEqual(a: LiveSettings, b: unknown): boolean {
   return a.timeframe === b.timeframe && a.capitalPerVenue === b.capitalPerVenue && a.orderSizePercent === b.orderSizePercent
     && a.hyperliquidMakerFeePercent === b.hyperliquidMakerFeePercent && a.hyperliquidTakerFeePercent === b.hyperliquidTakerFeePercent
     && a.lighterMakerFeePercent === b.lighterMakerFeePercent && a.lighterTakerFeePercent === b.lighterTakerFeePercent
-    && tracks(a) === tracks(b);
+    && tracks(a) === tracks(b)
+    && (a.live === undefined) === (b.live === undefined)
+    && a.live?.dailyLossLimitPercent === b.live?.dailyLossLimitPercent && a.live?.maxLeverage === b.live?.maxLeverage
+    && a.live?.exchangeStopPercent === b.live?.exchangeStopPercent && a.live?.exchangeStopFrom === b.live?.exchangeStopFrom
+    && a.live?.maxSlippagePercent === b.live?.maxSlippagePercent && a.live?.maxPositionUsdc === b.live?.maxPositionUsdc
+    && Boolean(a.live?.minimumOrderSize) === Boolean(b.live?.minimumOrderSize);
 }
 
 export function validPaperSettings(settings: LiveSettings, limits: PaperCapabilities | null): string | null {
@@ -101,6 +107,18 @@ export function validPaperSettings(settings: LiveSettings, limits: PaperCapabili
   if (!Number.isFinite(settings.orderSizePercent) || settings.orderSizePercent <= 0 || settings.orderSizePercent > 100) return 'Order size must be above 0% and at most 100%.';
   const fees = [settings.hyperliquidMakerFeePercent, settings.hyperliquidTakerFeePercent, settings.lighterMakerFeePercent, settings.lighterTakerFeePercent];
   if (fees.some((fee) => fee === null || !Number.isFinite(fee) || fee < 0 || fee > 100)) return 'Enter all four fees from 0% to 100% (0 is allowed).';
+  if (settings.live) {
+    if (settings.tracks.some((track) => track.venue !== 'Lighter')) return 'Live trading supports Lighter markets only.';
+    const { dailyLossLimitPercent, maxLeverage, exchangeStopPercent, maxSlippagePercent, maxPositionUsdc } = settings.live;
+    if (maxPositionUsdc !== undefined && (!Number.isFinite(maxPositionUsdc) || maxPositionUsdc <= 0))
+      return 'Enter a max position above 0 USDC, or leave it empty for none.';
+    if (maxSlippagePercent !== undefined && (!Number.isFinite(maxSlippagePercent) || maxSlippagePercent < 0.05
+      || maxSlippagePercent > 50)) return 'Enter a max slippage from 0.05% to 50%.';
+    if (dailyLossLimitPercent !== undefined && (!Number.isFinite(dailyLossLimitPercent) || dailyLossLimitPercent < 1
+      || dailyLossLimitPercent > 99)) return 'Enter a daily loss limit from 1% to 99%, or leave it empty for none.';
+    if (!Number.isFinite(maxLeverage) || maxLeverage <= 0 || maxLeverage > LIVE_MAX_LEVERAGE) return `Enter the account leverage limit, above 0 and at most ${LIVE_MAX_LEVERAGE}x.`;
+    if (!Number.isFinite(exchangeStopPercent) || exchangeStopPercent <= 0 || exchangeStopPercent > LIVE_MAX_EXCHANGE_STOP_PERCENT) return `Enter the exchange stop distance, above 0% and at most ${LIVE_MAX_EXCHANGE_STOP_PERCENT}%.`;
+  }
   return null;
 }
 
@@ -292,6 +310,18 @@ export function PaperSetupPreview({ source, fromBacktest, fromEditor = fromBackt
   const [feeMultipliers, setFeeMultipliers] = useState<Record<Venue, Record<string, number>>>({ Hyperliquid: {}, Lighter: {} });
   const [capabilities, setCapabilities] = useState<PaperCapabilities | null>(null);
   const [capabilityError, setCapabilityError] = useState('');
+  // Live (real money) is never restored on its own: each Live launch is chosen and confirmed again.
+  const [mode, setMode] = useState<'paper' | 'live'>('paper');
+  const [liveConfirmed, setLiveConfirmed] = useState(false);
+  const [liveFields, setLiveFields] = useState(() => ({
+    dailyLossLimitPercent: initial?.live?.dailyLossLimitPercent !== undefined ? String(initial.live.dailyLossLimitPercent) : '',
+    maxLeverage: initial?.live ? String(initial.live.maxLeverage) : '',
+    exchangeStopPercent: initial?.live ? String(initial.live.exchangeStopPercent) : '',
+    exchangeStopFrom: initial?.live?.exchangeStopFrom ?? 'strategy_stop' as 'strategy_stop' | 'entry_price',
+    maxSlippagePercent: String(initial?.live?.maxSlippagePercent ?? 3),
+    maxPositionUsdc: initial?.live?.maxPositionUsdc !== undefined ? String(initial.live.maxPositionUsdc) : '',
+    minimumOrderSize: initial?.live?.minimumOrderSize === true,
+  }));
   const [launchError, setLaunchError] = useState('');
   const [launching, setLaunching] = useState(false);
   const launchInFlight = useRef(false);
@@ -337,6 +367,13 @@ export function PaperSetupPreview({ source, fromBacktest, fromEditor = fromBackt
       Lighter: settings.tracks.filter((t) => t.venue === 'Lighter').map((t) => t.market) });
     setCapital(String(settings.capitalPerVenue));
     setOrderSize(String(settings.orderSizePercent));
+    if (settings.live) setLiveFields({
+      dailyLossLimitPercent: settings.live.dailyLossLimitPercent !== undefined ? String(settings.live.dailyLossLimitPercent) : '',
+      maxLeverage: String(settings.live.maxLeverage),
+      exchangeStopPercent: String(settings.live.exchangeStopPercent), exchangeStopFrom: settings.live.exchangeStopFrom,
+      maxSlippagePercent: String(settings.live.maxSlippagePercent ?? 3),
+      maxPositionUsdc: settings.live.maxPositionUsdc !== undefined ? String(settings.live.maxPositionUsdc) : '',
+      minimumOrderSize: settings.live.minimumOrderSize === true });
     setFees({
       // A strategy saved without fees gets each exchange's standard fee, not an empty field.
       hyperliquidMakerFeePercent: String(settings.hyperliquidMakerFeePercent ?? DEFAULT_PAPER_FEES.hyperliquidMakerFeePercent),
@@ -383,19 +420,35 @@ export function PaperSetupPreview({ source, fromBacktest, fromEditor = fromBackt
 
   const pythonParams = useMemo(() => Object.fromEntries(Object.entries(pythonInfo?.params ?? {})
     .map(([name, spec]) => [name, parseParam(spec, paramText[name] ?? String(spec.default))])), [pythonInfo, paramText]);
+  // The LIVE choice is offered in every edition; it trades once a Lighter account is connected and switched on.
+  const liveOffered = liveTradingAvailable(edition) && capabilities !== null;
+  const liveAllowed = liveOffered && capabilities?.liveTrading === true;
+  const liveChosen = mode === 'live' && liveOffered;
+  const live = liveChosen && liveAllowed;
+  const reloadCapabilities = () => { loadPaperCapabilities().then(setCapabilities).catch(() => { /* keep the last answer */ }); };
   const draft: LiveSettings = useMemo(() => ({
     ...(kind === 'python'
       ? { accountModel: 'python_live_v1' as const, strategyRef: pythonRef, params: pythonParams }
       : { accountModel: 'pine_live_v1' as const }),
     timeframe,
-    tracks: VENUES.flatMap((venue) => tracks[venue].map((market) => ({ venue, market }))),
+    // Live trades Lighter only; the Hyperliquid selection stays for Paper.
+    tracks: (live ? (['Lighter'] as const) : VENUES).flatMap((venue) => tracks[venue].map((market) => ({ venue, market }))),
     capitalPerVenue: parseNumber(capital),
     orderSizePercent: parseNumber(orderSize),
     hyperliquidMakerFeePercent: parseNumber(fees.hyperliquidMakerFeePercent),
     hyperliquidTakerFeePercent: parseNumber(fees.hyperliquidTakerFeePercent),
     lighterMakerFeePercent: parseNumber(fees.lighterMakerFeePercent),
     lighterTakerFeePercent: parseNumber(fees.lighterTakerFeePercent),
-  }), [kind, pythonRef, pythonParams, timeframe, tracks, capital, orderSize, fees]);
+    ...(live ? { live: {
+      // Empty: no daily limit.
+      ...(liveFields.dailyLossLimitPercent.trim() === '' ? {} : { dailyLossLimitPercent: parseNumber(liveFields.dailyLossLimitPercent) }),
+      maxLeverage: parseNumber(liveFields.maxLeverage),
+      exchangeStopPercent: parseNumber(liveFields.exchangeStopPercent), exchangeStopFrom: liveFields.exchangeStopFrom,
+      maxSlippagePercent: parseNumber(liveFields.maxSlippagePercent),
+      // Empty: no cap.
+      ...(liveFields.maxPositionUsdc.trim() === '' ? {} : { maxPositionUsdc: parseNumber(liveFields.maxPositionUsdc) }),
+      ...(liveFields.minimumOrderSize ? { minimumOrderSize: true } : {}) } } : {}),
+  }), [kind, pythonRef, pythonParams, timeframe, tracks, capital, orderSize, fees, live, liveFields]);
   const selectedSource = sourceChoice === 'saved' && savedStrategy ? savedStrategy.version.source : source;
   const paramsError = pythonInfo ? Object.entries(pythonInfo.params)
     .map(([name, spec]) => paramError(name, spec, pythonParams[name]!)).find(Boolean) ?? null : null;
@@ -409,7 +462,11 @@ export function PaperSetupPreview({ source, fromBacktest, fromEditor = fromBackt
         ? 'Paste a Pine strategy in the editor first.'
         : kind === 'pine' && sourceChoice === 'saved' && !savedStrategy
           ? 'Choose a saved strategy or use the editor code.'
-          : settingsError;
+          : liveChosen && !liveAllowed
+            ? 'Connect your Lighter account and switch LIVE mode on first.'
+          : live && capabilities.liveActive
+            ? LIVE_ALREADY_ACTIVE_MESSAGE
+            : settingsError ?? (live && !liveConfirmed ? 'Confirm that this run trades real money.' : null);
   const willSave = kind === 'python' || sourceChoice === 'editor' || !savedStrategy
     || pythonStrategyRef(savedStrategy.version.source) !== null || !paperSettingsEqual(draft, savedStrategy.version.paperSettings);
 
@@ -433,6 +490,7 @@ export function PaperSetupPreview({ source, fromBacktest, fromEditor = fromBackt
         strategyId: version.strategy.id, version: version.version.version, sourceSha256: version.version.sourceSha256,
         settings, idempotencyKey: idempotency.current.key,
       });
+      setLiveConfirmed(false);
       onRuns();
       window.history.replaceState(null, '', `/paper/${encodeURIComponent(experiment.id)}`);
       window.dispatchEvent(new Event('paper-route-changed'));
@@ -466,6 +524,57 @@ export function PaperSetupPreview({ source, fromBacktest, fromEditor = fromBackt
       {capabilities && !capabilities.available && <div className="paper-preview-notice" role="status">
         <AlertTriangle size={18} /><div><strong>{launchBlocker}</strong></div>
       </div>}
+
+      {liveOffered && <section className={liveChosen ? 'paper-card paper-mode-card paper-mode-live' : 'paper-card paper-mode-card'} aria-label="Run mode">
+        <span className="eyebrow">00 / MODE</span>
+        <div className="paper-mode-options" role="radiogroup" aria-label="Run mode">
+          <label><input type="radio" name="paper-run-mode" checked={!liveChosen} onChange={() => { setMode('paper'); setLiveConfirmed(false); }} />Paper — virtual money</label>
+          <label><input type="radio" name="paper-run-mode" checked={liveChosen} onChange={() => setMode('live')} />LIVE — real money on Lighter</label>
+        </div>
+        {liveChosen && !liveAllowed && <>
+          <h3 className="paper-live-connect-title">Connect your Lighter account</h3>
+          <p className="paper-card-footnote">On Lighter create an API key for your account (API key index 4–254), then enter the
+            account index, the API key index and the API private key here, tick "Enable LIVE mode" and save.</p>
+          <LiveSettingsPanel onChanged={reloadCapabilities} />
+        </>}
+        {live && <>
+          <p className="paper-live-warning" role="note"><AlertTriangle size={16} /><span><strong>LIVE — real money.</strong> Orders go to your Lighter account at once.
+            Take-profits and stops are held by the engine; each open position also gets a reduce-only stop on Lighter. Stop closes every position at market.</span></p>
+          <div className="paper-form-grid">
+            <label><span>Daily loss limit (%) <InfoTooltip label="daily loss limit" en="When the account equity (balance plus open profit and loss) drops this far below the value captured at the first start of the day (a new day starts at 06:00 UTC), the run closes every position and stops. The starting value is kept on the server, so a new run the same day continues from it." ru="Когда капитал счёта (баланс плюс открытая прибыль и убыток) опускается на этот процент ниже значения, зафиксированного при первом запуске за день (новый день начинается в 06:00 UTC), прогон закрывает все позиции и останавливается. Стартовое значение хранится на сервере, поэтому новый прогон в тот же день продолжает от него." /></span>
+              <div className="paper-input-suffix"><input type="text" inputMode="decimal" value={liveFields.dailyLossLimitPercent} aria-label="Daily loss limit percent"
+                placeholder="off" onChange={(event) => setLiveFields((current) => ({ ...current, dailyLossLimitPercent: event.target.value }))} /><span>%</span></div>
+              <small className="paper-field-hint">1–99%. Empty: off.</small></label>
+            <label><span>Account leverage <InfoTooltip label="account leverage" en={`All open positions together stay within this multiple of the account equity (balance plus open losses). 1 means no borrowing; above 1 positions may exceed the balance. At most ${LIVE_MAX_LEVERAGE}x; Lighter's own margin rules still apply.`} ru={`Все открытые позиции вместе не превышают это число × капитал счёта (баланс плюс открытые убытки). 1 — без займа у биржи; больше 1 — позиции могут быть больше баланса. Не больше ${LIVE_MAX_LEVERAGE}×; собственные правила маржи Lighter действуют всё равно.`} /></span>
+              <div className="paper-input-suffix"><input type="text" inputMode="decimal" value={liveFields.maxLeverage} aria-label="Account leverage limit"
+                onChange={(event) => setLiveFields((current) => ({ ...current, maxLeverage: event.target.value }))} /><span>x</span></div></label>
+            <div className="paper-field-stack"><label><span>Max position (USDC) <InfoTooltip label="max position" en="The largest position on one market, in USDC at the entry price. When Order size would open more, the entry is reduced to fit; when what is left is below Lighter's minimum order, the entry is not sent. Applies to each market separately, together with Account leverage." ru="Самая большая позиция на одном рынке, в USDC по цене входа. Если Order size откроет больше, вход уменьшается до этого размера; если остаток меньше минимальной заявки Lighter, вход не отправляется. Действует на каждый рынок отдельно, вместе с Account leverage." /></span>
+              <div className="paper-input-suffix"><input type="text" inputMode="decimal" value={liveFields.maxPositionUsdc} aria-label="Max position USDC"
+                placeholder="off" onChange={(event) => setLiveFields((current) => ({ ...current, maxPositionUsdc: event.target.value }))} /><span>USDC</span></div>
+              <small className="paper-field-hint">Per market. Empty: off.</small></label>
+              <label className="paper-inline-check"><input type="checkbox" checked={liveFields.minimumOrderSize} aria-label="Minimum order size"
+                onChange={(event) => setLiveFields((current) => ({ ...current, minimumOrderSize: event.target.checked }))} />
+                <span>Minimum order size <InfoTooltip label="minimum order size" en="Every entry opens the smallest order Lighter accepts on that market plus 15 % (about 11.5 USDC on most markets), whatever the balance; Order size is not used. The 15 % keep the exchange stop and the closes of a long above Lighter's minimum order. Max position and Account leverage still apply." ru="Каждый вход открывает самую маленькую заявку, которую Lighter принимает на этом рынке, плюс 15 % (около 11,5 USDC на большинстве рынков), независимо от баланса; Order size не используется. Запас 15 % нужен, чтобы стоп на бирже и закрытие лонга не оказались меньше минимальной заявки Lighter. Max position и Account leverage действуют как обычно." /></span></label></div>
+            <label><span>Exchange stop <InfoTooltip label="exchange stop" en="A reduce-only stop that waits on Lighter for each open position, this far beyond its reference: where it triggers. It closes the position if the server or the engine stops working. Once triggered, Lighter closes at market within Max slippage. If it executes while the run works, the run stops and closes everything." ru="Стоп «только закрытие», который ждёт на Lighter для каждой открытой позиции, на столько дальше точки отсчёта: где он срабатывает. Он закроет позицию, если сервер или двигатель перестанут работать. После срабатывания Lighter закрывает позицию по рынку в пределах Max slippage. Если он сработает при работающем прогоне, прогон остановится и закроет всё." /></span>
+              <div className="paper-input-suffix"><input type="text" inputMode="decimal" value={liveFields.exchangeStopPercent} aria-label="Exchange stop percent"
+                onChange={(event) => setLiveFields((current) => ({ ...current, exchangeStopPercent: event.target.value }))} /><span>%</span></div></label>
+            <label><span>Exchange stop from <InfoTooltip label="exchange stop reference" en="Strategy stop: beyond the strategy's own stop-loss (from the entry price when the strategy has none). Entry price: always from the position's average entry price. The exchange stop is placed again when the position's size changes; it does not follow a trailing stop." ru="Стоп стратегии: дальше её собственного стоп-лосса (от цены входа, если у стратегии стопа нет). Цена входа: всегда от средней цены входа позиции. Стоп на бирже переставляется, когда меняется размер позиции; за трейлинг-стопом он не следует." /></span>
+              <select value={liveFields.exchangeStopFrom} aria-label="Exchange stop from"
+                onChange={(event) => setLiveFields((current) => ({ ...current, exchangeStopFrom: event.target.value as 'strategy_stop' | 'entry_price' }))}>
+                <option value="strategy_stop">Strategy stop (entry price if none)</option>
+                <option value="entry_price">Entry price</option>
+              </select></label>
+            <label><span>Max slippage (%) <InfoTooltip label="max slippage" en="The price allowance of every market order of this run: how much worse than the current price (or a stop's trigger) Lighter may fill it. Without enough allowance a fast move cancels the order. Applies to market exits and entries, the exchange stop and the closes on Stop. Limit orders keep their price." ru="Допуск цены для каждой рыночной заявки прогона: насколько хуже текущей цены (или цены срабатывания стопа) Lighter может её исполнить. Без достаточного допуска быстрое движение цены отменяет заявку. Действует на рыночные выходы и входы, стоп на бирже и закрытия при остановке. Лимитные заявки исполняются по своей цене." /></span>
+              <div className="paper-input-suffix"><input type="text" inputMode="decimal" value={liveFields.maxSlippagePercent} aria-label="Max slippage percent"
+                onChange={(event) => setLiveFields((current) => ({ ...current, maxSlippagePercent: event.target.value }))} /><span>%</span></div>
+              <small className="paper-field-hint">Default 3%, from 0.05% to 50%: the price allowance of a market order.</small></label>
+          </div>
+          <label className="paper-live-confirm"><input type="checkbox" checked={liveConfirmed} onChange={(event) => setLiveConfirmed(event.target.checked)} />
+            I understand: this run places real orders with real money on my Lighter account.</label>
+          <details className="paper-live-account"><summary>Lighter account and API key</summary>
+            <LiveSettingsPanel onChanged={reloadCapabilities} /></details>
+        </>}
+      </section>}
 
       <div className="paper-setup-grid">
         <section className="paper-card paper-strategy-card">
@@ -522,61 +631,74 @@ export function PaperSetupPreview({ source, fromBacktest, fromEditor = fromBackt
 
         <section className="paper-card paper-budget-card">
           <span className="eyebrow">02 / ACCOUNTS AND FEES</span>
-          <h2>One virtual account per exchange <InfoTooltip label="virtual accounts" en="All selected markets of one exchange share its virtual USDC account. The balance applies to each exchange separately." ru="Все выбранные рынки одной биржи делят её виртуальный счёт в USDC. Баланс задаётся для каждой биржи отдельно." /></h2>
+          {live
+            ? <h2>Your Lighter account <InfoTooltip label="Lighter account" en="All selected markets trade on the Lighter account whose API key is on the server. Entries are sized from its real balance." ru="Все выбранные рынки торгуют на счёте Lighter, чей ключ лежит на сервере. Размер входа считается от его настоящего баланса." /></h2>
+            : <h2>One virtual account per exchange <InfoTooltip label="virtual accounts" en="All selected markets of one exchange share its virtual USDC account. The balance applies to each exchange separately." ru="Все выбранные рынки одной биржи делят её виртуальный счёт в USDC. Баланс задаётся для каждой биржи отдельно." /></h2>}
           <div className="paper-form-grid">
-            <label><span>Starting balance per exchange</span><div className="paper-input-suffix"><input type="number" min="100" step="100" value={capital} aria-label="Starting balance per exchange" onChange={(event) => setCapital(event.target.value)} /><span>USDC</span></div></label>
-            <label><span>Order size <InfoTooltip label="order size" en={`Each new entry uses this percent of the exchange account balance${pythonAllowed ? " (a Python strategy may scale it per entry)" : ""}. The strategy decides direction and timing; exits close the same share of the real position that the strategy closes.`} ru={`Каждый новый вход использует этот процент баланса счёта биржи${pythonAllowed ? " (Python-стратегия может масштабировать его для отдельного входа)" : ""}. Стратегия решает направление и момент; выходы закрывают ту же долю реальной позиции, что закрывает стратегия.`} /></span><div className="paper-input-suffix"><input type="text" inputMode="decimal" value={orderSize} aria-label="Order size percent" onChange={(event) => setOrderSize(event.target.value)} /><span>% of account</span></div></label>
-            {feeField('hyperliquidMakerFeePercent', 'Hyperliquid maker fee')}
-            {feeField('hyperliquidTakerFeePercent', 'Hyperliquid taker fee')}
+            {live ? <div className="paper-readonly-field"><span>Balance</span><strong>Real Lighter balance</strong></div>
+            : <label><span>Starting balance per exchange</span><div className="paper-input-suffix"><input type="number" min="100" step="100" value={capital} aria-label="Starting balance per exchange" onChange={(event) => setCapital(event.target.value)} /><span>USDC</span></div></label>}
+            <label><span>Order size <InfoTooltip label="order size" en={`Each new entry uses this percent of the exchange account balance${pythonAllowed ? " (a Python strategy may scale it per entry)" : ""}. The strategy decides direction and timing; exits close the same share of the real position that the strategy closes.`} ru={`Каждый новый вход использует этот процент баланса счёта биржи${pythonAllowed ? " (Python-стратегия может масштабировать его для отдельного входа)" : ""}. Стратегия решает направление и момент; выходы закрывают ту же долю реальной позиции, что закрывает стратегия.`} /></span><div className="paper-input-suffix"><input type="text" inputMode="decimal" value={orderSize} aria-label="Order size percent" onChange={(event) => setOrderSize(event.target.value)} /><span>% of account</span></div>{live && liveFields.minimumOrderSize && <small className="paper-field-hint">LIVE: not used — Minimum order size is on.</small>}</label>
+            {!live && feeField('hyperliquidMakerFeePercent', 'Hyperliquid maker fee')}
+            {!live && feeField('hyperliquidTakerFeePercent', 'Hyperliquid taker fee')}
             {feeField('lighterMakerFeePercent', 'Lighter maker fee')}
             {feeField('lighterTakerFeePercent', 'Lighter taker fee')}
           </div>
-          <p className="paper-card-footnote">Defaults are public base-tier fees. Funding payments are not included.</p>
+          <p className="paper-card-footnote">{live
+            ? 'Lighter charges its own fees on real orders; these fields only feed a Pine strategy\'s commission.'
+            : 'Defaults are public base-tier fees. Funding payments are not included.'}</p>
         </section>
       </div>
 
       <section className="paper-card paper-market-card">
         <div className="paper-card-title"><div><span className="eyebrow">03 / MARKETS</span><h2>Any USDC perpetuals, up to {MAX_PER_VENUE} per exchange <InfoTooltip label="market selection" en="Pick markets on one or both exchanges. Each market runs its own copy of the strategy on its own candles and order book." ru="Выберите рынки на одной или обеих биржах. На каждом рынке работает своя копия стратегии на его свечах и стакане." /></h2></div>
           <span className="paper-count-chip">{draft.tracks.length} market{draft.tracks.length === 1 ? '' : 's'}</span></div>
-        <label className="paper-add-both"><input type="checkbox" checked={addToBoth} onChange={(event) => setAddToBoth(event.target.checked)} />
-          Add to both exchanges when the market is listed on both</label>
-        <p className="paper-market-note">Hyperliquid also lists <strong>xyz:</strong> markets (stocks, indices, commodities by trade.xyz).
-          Each has its own fee, shown as a multiple of the Hyperliquid fee above, and trades thinly while its home exchange is closed.</p>
+        {live ? <p className="paper-market-note">LIVE trades <strong>Lighter</strong> markets only; Hyperliquid markets stay selected for Paper.</p> : <>
+          <label className="paper-add-both"><input type="checkbox" checked={addToBoth} onChange={(event) => setAddToBoth(event.target.checked)} />
+            Add to both exchanges when the market is listed on both</label>
+          <p className="paper-market-note">Hyperliquid also lists <strong>xyz:</strong> markets (stocks, indices, commodities by trade.xyz).
+            Each has its own fee, shown as a multiple of the Hyperliquid fee above, and trades thinly while its home exchange is closed.</p>
+        </>}
         <div className="paper-venue-grid">
-          {VENUES.map((venue) => {
+          {VENUES.filter((venue) => !live || venue === 'Lighter').map((venue) => {
             const otherVenue = venue === 'Hyperliquid' ? 'Lighter' : 'Hyperliquid';
             return <MarketPicker key={venue} venue={venue} otherVenue={otherVenue} options={markets[venue]} otherOptions={markets[otherVenue]}
             volumes={volumes[venue]} feeMultipliers={feeMultipliers[venue]} selected={tracks[venue]} error={marketErrors[venue]}
             onAdd={(market) => setTracks((current) => {
-              const also = addToBoth && markets[otherVenue]?.includes(market) && !current[otherVenue].includes(market)
+              const also = !live && addToBoth && markets[otherVenue]?.includes(market) && !current[otherVenue].includes(market)
                 && current[otherVenue].length < MAX_PER_VENUE;
               return { ...current, [venue]: [...current[venue], market], ...(also ? { [otherVenue]: [...current[otherVenue], market] } : {}) };
             })}
             onRemove={(market) => setTracks((current) => ({ ...current, [venue]: current[venue].filter((item) => item !== market) }))} />;
           })}
         </div>
-        <XyzHoursNotice markets={tracks.Hyperliquid.filter(isXyzMarket)} />
+        {!live && <XyzHoursNotice markets={tracks.Hyperliquid.filter(isXyzMarket)} />}
       </section>
 
       <section className="paper-card paper-readiness-card">
         <span className="eyebrow">04 / HOW ORDERS EXECUTE</span>
-        <ul className="paper-execution-rules">
+        {live ? <ul className="paper-execution-rules">
+          <li>Orders go to Lighter at once over the open connection, with no modeled delay; Lighter matches them against its own book.</li>
+          <li>Take-profits, stops and trailing stops are held by the engine and sent the moment the price reaches them.</li>
+          <li>Each open position also has a reduce-only stop on Lighter, beyond the strategy's stop: it protects the position if the server stops; if it executes, the run stops.</li>
+          <li>Every 10 s the run compares its positions with the Lighter account; two differences in a row stop it.</li>
+          <li>Stop, the daily loss limit or five refused orders in a row close every position at market and end the run.</li>
+        </ul> : <ul className="paper-execution-rules">
           <li>Market orders execute about 0.2 s after the strategy sends them, as IOC against the live book.</li>
           <li>Limit orders and take-profits fill when the opposite best price reaches them.</li>
           <li>Stops, stop-losses and trailing stops trigger on the live best price, then execute 0.3 s later.</li>
           <li>Partial fills are real: the rest of an exit keeps working; an entry keeps what filled.</li>
-        </ul>
+        </ul>}
       </section>
 
       <div className="paper-action-bar">
         <div><strong>{launching ? 'Starting…' : launchError ? 'Launch failed' : launchBlocker ? 'Not ready' : 'Ready'}</strong>
-          <span>{launchBlocker ?? `${draft.tracks.length} market(s), ${timeframe} bars, ${draft.orderSizePercent}% per entry.`}</span>
+          <span>{launchBlocker ?? `${live ? 'LIVE, real money: ' : ''}${draft.tracks.length} market(s), ${timeframe} bars, ${draft.orderSizePercent}% per entry.`}</span>
           {launchError && <p id="paper-launch-error" className="paper-launch-error" role="alert"><AlertTriangle size={16} />{launchError}</p>}
         </div>
         <div className="paper-action-buttons">
           <button type="button" className="paper-text-button" onClick={onRuns}>View Paper Runs <ArrowRight size={15} /></button>
-          <button type="button" className="run-button" aria-describedby={launchError ? 'paper-launch-error' : undefined}
-            disabled={Boolean(launchBlocker) || launching || catalogBusy} onClick={() => { void launchPaper(); }}>{launching ? 'Starting…' : 'Start Paper'}</button>
+          <button type="button" className={live ? 'run-button run-button-live' : 'run-button'} aria-describedby={launchError ? 'paper-launch-error' : undefined}
+            disabled={Boolean(launchBlocker) || launching || catalogBusy} onClick={() => { void launchPaper(); }}>{launching ? 'Starting…' : live ? 'Start LIVE' : 'Start Paper'}</button>
         </div>
       </div>
     </section>

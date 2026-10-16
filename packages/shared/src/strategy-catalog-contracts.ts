@@ -103,6 +103,36 @@ export const PineLiveTrackSchema = z.object({
   market: z.string().regex(PAPER_MARKET_SYMBOL_PATTERN),
 }).strict();
 
+/** Highest account leverage a Live run may be given (the engine enforces the same bound). */
+export const LIVE_MAX_LEVERAGE = 50;
+/** Farthest the exchange-side stop may sit beyond its reference, percent (the engine enforces the same). */
+export const LIVE_MAX_EXCHANGE_STOP_PERCENT = 50;
+
+/**
+ * Live trading (full edition, Lighter mainnet only): real orders on the owner's Lighter account.
+ * Limits are chosen by the owner at launch; see docs/LIVE_TRADING_DESIGN.md.
+ */
+export const LiveTradingSettingsSchema = z.object({
+  /**
+   * Percent the account equity (balance plus open PnL) may fall below the day's starting equity
+   * (captured at the first start after 06:00 UTC); absent: no daily limit.
+   */
+  dailyLossLimitPercent: z.number().finite().min(1).max(99).optional(),
+  maxLeverage: z.number().finite().gt(0).max(LIVE_MAX_LEVERAGE),
+  /** The exchange-side reduce-only stop sits this far beyond its reference. */
+  exchangeStopPercent: z.number().finite().gt(0).max(LIVE_MAX_EXCHANGE_STOP_PERCENT),
+  /** Reference: the strategy's stop (the entry price when it has none) or always the entry price. */
+  exchangeStopFrom: z.enum(['strategy_stop', 'entry_price']),
+  /** Price allowance of every market order of the run (worst price vs the quote or trigger); absent: 3 %. */
+  maxSlippagePercent: z.number().finite().min(0.05).max(50).optional(),
+  /** Largest position on one market, USDC at the entry price; a larger entry shrinks to fit. Absent: no cap. */
+  maxPositionUsdc: z.number().finite().gt(0).max(1_000_000_000).optional(),
+  /** Every entry is the market's smallest order Lighter accepts; Order size is not used. */
+  minimumOrderSize: z.boolean().optional(),
+}).strict();
+
+export type LiveTradingSettings = z.infer<typeof LiveTradingSettingsSchema>;
+
 /**
  * Generic Pine Paper: the saved Pine strategy runs on the venue's own closed
  * candles and its orders execute in real time against live order books.
@@ -119,9 +149,12 @@ const liveSettingsShape = {
   hyperliquidTakerFeePercent: z.number().finite().min(0).max(100).nullable(),
   lighterMakerFeePercent: z.number().finite().min(0).max(100).nullable(),
   lighterTakerFeePercent: z.number().finite().min(0).max(100).nullable(),
+  /** Present only for a Live run: real orders instead of the virtual account. */
+  live: LiveTradingSettingsSchema.optional(),
 };
 
-function validateLiveTracks(value: { tracks: readonly { venue: string; market: string }[] }, context: z.RefinementCtx): void {
+function validateLiveTracks(value: { tracks: readonly { venue: string; market: string }[]; live?: unknown },
+  context: z.RefinementCtx): void {
   const keys = new Set<string>();
   for (const [index, track] of value.tracks.entries()) {
     const key = `${track.venue}:${track.market}`;
@@ -137,6 +170,9 @@ function validateLiveTracks(value: { tracks: readonly { venue: string; market: s
     if (track.venue === 'Lighter' && hip3Dex(track.market) !== null) {
       context.addIssue({ code: 'custom', path: ['tracks', index], message: 'Prefixed (HIP-3) markets exist only on Hyperliquid.' });
     }
+  }
+  if (value.live !== undefined && value.tracks.some((track) => track.venue !== 'Lighter')) {
+    context.addIssue({ code: 'custom', path: ['tracks'], message: 'Live trading supports Lighter markets only.' });
   }
 }
 

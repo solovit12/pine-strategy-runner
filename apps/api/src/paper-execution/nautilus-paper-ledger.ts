@@ -514,18 +514,18 @@ export function reconcileNautilusPaperOutbox(
 }
 
 function controlEvents(detail: PaperExperimentDetail): PaperExperimentActivityEvent[] {
+  const run = detail.live ? 'LIVE run' : 'Paper experiment';
   const result: PaperExperimentActivityEvent[] = [
-    { id: 'control:created', at: detail.createdAt, kind: 'created', message: 'Paper experiment created.' },
+    { id: 'control:created', at: detail.createdAt, kind: 'created', message: `${run} created.` },
   ];
   if (detail.startedAt) result.push({ id: 'control:started', at: detail.startedAt,
-    kind: 'started', message: 'Paper execution started.' });
+    kind: 'started', message: detail.live ? 'LIVE trading started on Lighter.' : 'Paper execution started.' });
   if (detail.endedAt) result.push({ id: 'control:ended', at: detail.endedAt,
-    kind: 'stopped', message: detail.status === 'completed'
-      ? 'Paper experiment completed.' : 'Paper experiment interrupted.' });
+    kind: 'stopped', message: detail.status === 'completed' ? `${run} completed.` : `${run} interrupted.` });
   return result;
 }
 
-function activityEvent(message: NautilusPaperMessageV1): PaperExperimentActivityEvent | null {
+function activityEvent(message: NautilusPaperMessageV1, live = false): PaperExperimentActivityEvent | null {
   const base = { id: `nautilus:${message.seq}`, at: new Date(message.at).toISOString(),
     ...(message.venue ? { venue: message.venue } : {}),
     ...('market' in message && message.market ? { market: message.market } : {}) };
@@ -534,7 +534,8 @@ function activityEvent(message: NautilusPaperMessageV1): PaperExperimentActivity
       + `${message.qty ? `, Pine qty ${message.qty}` : ''}.` };
   if (message.type === 'pine_bar') return { ...base, kind: 'signal', message: message.message };
   if (message.type === 'phase') return { ...base, kind: 'status',
-    message: message.stage === 'stopping' ? 'Stopping both virtual accounts.' : message.message };
+    message: message.stage === 'stopping'
+      ? (live ? 'Stopping LIVE; closing every position on Lighter.' : 'Stopping both virtual accounts.') : message.message };
   if (message.type === 'event' && (message.message.startsWith(RECOVERY_DIAGNOSTIC_PREFIX)
     || message.message.startsWith(PAPER_DIAGNOSTIC_PREFIX)
     || message.message.startsWith(PAPER_LATENCY_PREFIX))) return null;
@@ -542,10 +543,10 @@ function activityEvent(message: NautilusPaperMessageV1): PaperExperimentActivity
     message: message.message.startsWith('Hourly data refresh failed:')
       ? 'Waiting to verify the next closed hour.' : publicDataEventText(message.message) };
   if (message.type === 'failure') return { ...base, kind: 'status',
-    message: 'Paper runtime failed; the experiment is stopping.' };
-  if (message.type === 'stopped') return { ...base, kind: 'stopped', message: 'Paper runtime stopped.' };
+    message: live ? 'LIVE engine failed; the run stops and closes every position.' : 'Paper runtime failed; the experiment is stopping.' };
+  if (message.type === 'stopped') return { ...base, kind: 'stopped', message: live ? 'LIVE engine stopped.' : 'Paper runtime stopped.' };
   if (message.type === 'fill') return { ...base, kind: 'fill', venue: message.venue, market: message.market,
-    message: `${message.kind === 'entry' ? 'Entry' : 'Exit'} virtual fill committed.` };
+    message: `${message.kind === 'entry' ? 'Entry' : 'Exit'} ${live ? 'fill on Lighter.' : 'virtual fill committed.'}` };
   return null;
 }
 
@@ -715,7 +716,7 @@ export function readNautilusPaperActivity(
       .all(RECOVERY_DIAGNOSTIC_PREFIX.length, RECOVERY_DIAGNOSTIC_PREFIX,
         PAPER_DIAGNOSTIC_PREFIX.length, PAPER_DIAGNOSTIC_PREFIX,
         PAPER_LATENCY_PREFIX.length, PAPER_LATENCY_PREFIX) as Row[];
-    const events = [...control, ...recent.map((row) => activityEvent(checkedRow(row, expected)))
+    const events = [...control, ...recent.map((row) => activityEvent(checkedRow(row, expected), Boolean(detail.live)))
       .filter((event): event is PaperExperimentActivityEvent => event !== null)]
       .sort(newestEvent)
       .slice(0, 50);

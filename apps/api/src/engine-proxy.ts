@@ -14,7 +14,7 @@ import { isCrossOriginPaperWrite } from './paper-routes.js';
  */
 export const ENGINE_TOKEN_HEADER = 'x-psr-engine-token';
 export const DEFAULT_ENGINE_URL = 'http://127.0.0.1:8788';
-const PAPER_PATHS = ['/api/paper/*', '/api/paper-experiments', '/api/paper-experiments/*', '/api/python-strategies'];
+const PAPER_PATHS = ['/api/paper/*', '/api/paper-experiments', '/api/paper-experiments/*', '/api/python-strategies', '/api/live/*'];
 const ENGINE_DOWN = 'The Paper engine is not running. Backtests and the strategy library still work.';
 
 export interface EngineConnection {

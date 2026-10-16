@@ -295,7 +295,11 @@ class PublicBridge(Strategy):
             if not self.controller.allow_public_frame(self.spec.key, "quote", quote.ts_event, quote.ts_init):
                 return
             if self._ensure_instrument():
-                self.feeds[self.spec.venue_key].publish_quote(quote)
+                if getattr(self.controller, "live", None) is not None:
+                    # Live: straight to the strategy, no copy (the strategy reads the venue's own book).
+                    self.controller.strategies[self.spec.key].on_quote(quote)
+                else:
+                    self.feeds[self.spec.venue_key].publish_quote(quote)
         except Exception as exc:
             self.controller.fail(f"{self.spec.display} quote bridge: {type(exc).__name__}: {exc}", self.spec.key)
 
@@ -324,7 +328,10 @@ class PublicBridge(Strategy):
                     # Remain blocked until this exact replacement reaches the
                     # PAPER strategy, after both its cache and Sandbox update.
                     self.controller.book_sync_required[self.spec.key] = (batch.ts_event, batch.ts_init, batch.sequence)
-                self.feeds[self.spec.venue_key].publish_book(batch)
+                if getattr(self.controller, "live", None) is not None:
+                    self.controller.strategies[self.spec.key].on_book_deltas(batch)
+                else:
+                    self.feeds[self.spec.venue_key].publish_book(batch)
         except Exception as exc:
             self.controller.fail(f"{self.spec.display} book bridge: {type(exc).__name__}: {exc}", self.spec.key)
 

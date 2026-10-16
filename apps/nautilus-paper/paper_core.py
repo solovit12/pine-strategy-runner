@@ -123,6 +123,13 @@ class TrackStrategy(Strategy):
         self.spec = spec
         self.controller = controller
         self.run_config = config
+        # Paper: market data arrives on the Sandbox copy (paper_id), and orders, positions and the
+        # balance live there. Live: the bridge hands every accepted venue message straight to this
+        # strategy, which reads the venue's own book and trades the venue's own instrument.
+        self.live = config.get("live") is not None
+        self.data_id = spec.source_id if self.live else spec.paper_id
+        self.exec_id = spec.source_id if self.live else spec.paper_id
+        self.exec_venue = spec.source_venue if self.live else spec.paper_venue
         self.last_quote_ms = 0
         self.last_quote_event_ms = 0
         self.last_quote_event_ns = 0
@@ -191,6 +198,8 @@ class TrackStrategy(Strategy):
     # ----- public inputs ------------------------------------------------------
 
     def on_start(self):
+        if self.live:
+            return  # no copy and no second message-bus hop: PublicBridge calls on_quote / on_book_deltas
         self.subscribe_quotes(self.spec.paper_id)
         self.subscribe_book_deltas(self.spec.paper_id, BookType.L2_MBP, managed=True)
 
@@ -262,15 +271,15 @@ class TrackStrategy(Strategy):
         self.observe_diagnostics()
 
     def _instrument(self):
-        instrument = self.cache.instrument(self.spec.paper_id)
+        instrument = self.cache.instrument(self.data_id)
         if instrument is None:
-            raise ValueError("Paper instrument not loaded")
+            raise ValueError("instrument not loaded")
         return instrument
 
     def _book(self):
-        book = self.cache.order_book(self.spec.paper_id)
+        book = self.cache.order_book(self.data_id)
         if book is None:
-            raise ValueError("Paper book unavailable")
+            raise ValueError("order book unavailable")
         return book
 
     def on_quote(self, quote):
@@ -323,7 +332,7 @@ class TrackStrategy(Strategy):
             return False
         if Decimal(str(bid)) >= Decimal(str(ask)) or Decimal(str(bid_size)) <= 0 or Decimal(str(ask_size)) <= 0:
             return False
-        quote = QuoteTick(self.spec.paper_id, bid, ask, bid_size, ask_size, batch.ts_event, batch.ts_init)
+        quote = QuoteTick(self.data_id, bid, ask, bid_size, ask_size, batch.ts_event, batch.ts_init)
         self._accept_quote(quote, timing, at_ms)
         return True
 
@@ -410,13 +419,18 @@ class TrackStrategy(Strategy):
     def _order_transition(self, name, event):
         self._order_latency(name, event)
         self.broker_revision += 1
-        self.controller.event(self.spec.key, f"Paper order {event.client_order_id} {name}")
+        self.controller.event(self.spec.key, f"{'LIVE' if self.live else 'Paper'} order {event.client_order_id} {name}")
 
     def on_order_filled(self, event):
         self._guard("order fill", lambda: self._on_fill(event), allow_during_stop=True)
 
     def on_order_canceled(self, event):
         self._guard("order canceled", lambda: self._on_canceled(event), allow_during_stop=True)
+
+    def on_order_expired(self, event):
+        # Lighter reports some ended orders as expired ("canceled-expired"): handled as a cancel
+        # (owner decision 2026-10-15). The simulator never expires the engine's IOC orders.
+        self._guard("order expired", lambda: self._on_canceled(event), allow_during_stop=True)
 
     def on_order_rejected(self, event):
         self._guard("order rejected latency", lambda: self._order_latency("rejected", event), allow_during_stop=True)
@@ -437,12 +451,12 @@ class TrackStrategy(Strategy):
         self.last_book_key = None
 
     def account_snapshot(self):
-        account = self.cache.account_for_venue(self.spec.paper_venue)
+        account = self.cache.account_for_venue(self.exec_venue)
         balance = account.balance(USDC) if account else None
         positions = []
         quote = self.last_quote
         mark = ((Decimal(str(quote.bid_price)) + Decimal(str(quote.ask_price))) / 2) if quote is not None else None
-        for position in self.cache.positions_open(instrument_id=self.spec.paper_id):
+        for position in self.cache.positions_open(instrument_id=self.exec_id):
             side = "long" if str(position.side).upper().endswith("LONG") else "short"
             quantity = Decimal(str(position.quantity))
             row = {"market": self.spec.market, "side": side, "remainingBaseQuantity": decimal_string(quantity)}
@@ -460,7 +474,9 @@ class TrackStrategy(Strategy):
             positions.append(row)
         return {
             "venue": self.spec.display,
-            "cashBalance": decimal_string(balance.total.as_decimal()) if balance else self.run_config["capitalPerVenue"],
+            # Live: the real balance only; before the account arrives there is no virtual stand-in.
+            "cashBalance": (decimal_string(balance.total.as_decimal()) if balance
+                            else "0" if self.live else self.run_config["capitalPerVenue"]),
             "brokerRevision": self.broker_revision,
             "publicFrames": self.controller.public_frames[self.spec.key],
             "pendingOrders": len(self.pending_order_ids),

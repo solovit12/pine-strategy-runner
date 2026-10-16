@@ -45,6 +45,41 @@ describe('generic Pine Paper setup', () => {
     expect(validPaperSettings({ ...settings, capitalPerVenue: 50 }, null)).toMatch(/at least 100 USDC/);
   });
 
+  it('validates Live settings: Lighter only, every limit required, leverage at most 50x', () => {
+    const live = { ...settings, tracks: [{ venue: 'Lighter' as const, market: 'BTC' }],
+      live: { dailyLossLimitPercent: 10, maxLeverage: 3, exchangeStopPercent: 0.5, exchangeStopFrom: 'strategy_stop' as const } };
+    expect(validPaperSettings(live, null)).toBeNull();
+    expect(validPaperSettings({ ...live, tracks: settings.tracks }, null)).toBe('Live trading supports Lighter markets only.');
+    expect(validPaperSettings({ ...live, live: { ...live.live, dailyLossLimitPercent: Number.NaN } }, null)).toMatch(/daily loss limit/);
+    expect(validPaperSettings({ ...live, live: { ...live.live, dailyLossLimitPercent: 0.5 } }, null)).toMatch(/from 1% to 99%/);
+    expect(validPaperSettings({ ...live, live: { ...live.live, dailyLossLimitPercent: 100 } }, null)).toMatch(/from 1% to 99%/);
+    const { dailyLossLimitPercent: _off, ...noLimit } = live.live;
+    expect(validPaperSettings({ ...live, live: noLimit }, null)).toBeNull(); // empty: no daily limit
+    expect(validPaperSettings({ ...live, live: { ...live.live, maxLeverage: 51 } }, null)).toMatch(/at most 50x/);
+    expect(validPaperSettings({ ...live, live: { ...live.live, exchangeStopPercent: 0 } }, null)).toMatch(/exchange stop distance/);
+    expect(validPaperSettings({ ...live, live: { ...live.live, maxSlippagePercent: 0.01 } }, null)).toMatch(/max slippage from 0.05% to 50%/);
+    expect(validPaperSettings({ ...live, live: { ...live.live, maxSlippagePercent: 3 } }, null)).toBeNull();
+    expect(validPaperSettings({ ...live, live: { ...live.live, maxPositionUsdc: 0 } }, null)).toMatch(/max position above 0 USDC/);
+    expect(validPaperSettings({ ...live, live: { ...live.live, maxPositionUsdc: 13 } }, null)).toBeNull();
+    expect(paperSettingsEqual(live, { ...live, live: { ...live.live, maxPositionUsdc: 13 } })).toBe(false);
+    expect(paperSettingsEqual(live, { ...live, live: { ...live.live, minimumOrderSize: true } })).toBe(false);
+    expect(paperSettingsEqual(live, { ...live, live: { ...live.live, minimumOrderSize: false } })).toBe(true);
+    expect(paperSettingsEqual(live, { ...live, live: { ...live.live, exchangeStopFrom: 'entry_price' } })).toBe(false);
+    expect(paperSettingsEqual(live, live)).toBe(true);
+    expect(paperSettingsEqual(live, { ...live, live: { ...live.live, maxLeverage: 2 } })).toBe(false);
+    const { live: _live, ...paper } = live;
+    expect(paperSettingsEqual(live, paper)).toBe(false);
+  });
+
+  it('offers no Live mode until the engine answers', () => {
+    const setup = renderToStaticMarkup(createElement(PaperSetupPreview, {
+      source: savedStrategy.version.source, fromBacktest: false,
+      strategies: [savedStrategy.strategy], savedStrategy, catalogBusy: false, ...callbacks,
+    }));
+    expect(setup).not.toContain('LIVE — real money');
+    expect(setup).not.toContain('Start LIVE');
+  });
+
   it('derives the default market from the backtest symbol and compares settings independent of order', () => {
     expect(baseMarket('BTCUSDT')).toBe('BTC');
     expect(baseMarket('HYPE')).toBe('HYPE');

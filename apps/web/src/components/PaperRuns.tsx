@@ -38,6 +38,19 @@ function percent(value: unknown): string {
   return typeof value === 'number' && Number.isFinite(value) ? `${value}%` : '—';
 }
 
+/** A stopped Live run: whether every position is closed on Lighter, from the engine's own outcome. */
+export function LiveStopOutcome({ detail }: { detail: Pick<PaperExperimentDetail, 'live' | 'status' | 'reason'> }) {
+  if (!detail.live || !['completed', 'interrupted'].includes(detail.status) || !detail.reason) return null;
+  const outcome = detail.reason.match(/LIVE: (every position of this run is closed|positions still open|the engine did not confirm)[^]*$/)?.[0];
+  if (!outcome) return null;
+  if (outcome.startsWith('LIVE: every position')) {
+    return <div className="paper-live-outcome paper-live-outcome-closed" role="status"><ShieldCheck size={18} />
+      <div><strong>Every position of this run is closed on Lighter.</strong></div></div>;
+  }
+  return <div className="paper-live-outcome paper-live-outcome-open" role="alert"><AlertTriangle size={18} />
+    <div><strong>Positions may still be open on Lighter.</strong><span> {outcome.replace(/^LIVE: /, '')}</span></div></div>;
+}
+
 /** What this run trades and under which rules: markets, money, fees, strategy parameters, execution. */
 export function PaperRunRules({ detail, inOverview = false }: { detail: PaperExperimentDetail; inOverview?: boolean }) {
   const settings = detail.settings as unknown as Record<string, unknown>;
@@ -58,15 +71,24 @@ export function PaperRunRules({ detail, inOverview = false }: { detail: PaperExp
         const key = venue === 'Lighter' ? 'lighter' : 'hyperliquid';
         const maker = fee(key, 'Maker');
         return <tr key={venue}><td><strong>{venue}</strong></td><td>{detail.tracks.filter((track) => track.venue === venue).map((track) => track.market).join(', ')}</td>
-          <td>{typeof capital === 'number' ? `${capital.toLocaleString()} USDC` : '—'}</td>
+          <td>{detail.live ? 'real Lighter balance' : typeof capital === 'number' ? `${capital.toLocaleString()} USDC` : '—'}</td>
           <td>{settings[`${key}MakerFeePercent`] === undefined ? 'same as taker' : percent(maker)}</td><td>{percent(fee(key, 'Taker'))}</td></tr>;
       })}</tbody>
     </table></div>
     <ul className="paper-rules-list">
-      <li><span>Order size</span> {typeof size === 'number' ? `${size}% of the exchange balance per entry` : '—'}</li>
+      <li><span>Order size</span> {detail.live && (settings.live as { minimumOrderSize?: boolean } | undefined)?.minimumOrderSize
+        ? "each entry is the market's minimum order on Lighter plus 15%" : typeof size === 'number' ? `${size}% of the exchange balance per entry` : '—'}</li>
       <li><span>Bars</span> {detail.settings.timeframe} candles of each exchange</li>
       {params.length > 0 && <li><span>Strategy parameters</span> {params.map(([name, value]) => `${name} = ${String(value)}`).join(' · ')}</li>}
-      <li><span>Execution</span> market orders 200 ms after the decision; limit orders when the price reaches them; stops and stop-losses trigger on the live best price and execute 300 ms later; partial fills are real. Every Paper order takes liquidity from the order book, so the taker fee is charged on every fill (the maker fee is listed for reference). Funding is not counted. Virtual money only.</li>
+      {detail.live && <li><span>LIVE limits</span> {(() => {
+        const live = settings.live as { dailyLossLimitPercent?: number; maxLeverage: number; exchangeStopPercent: number;
+          exchangeStopFrom: 'strategy_stop' | 'entry_price'; maxSlippagePercent?: number; maxPositionUsdc?: number };
+        return `Lighter mainnet; exchange-side stop ${live.exchangeStopPercent}% beyond the ${live.exchangeStopFrom === 'entry_price'
+          ? 'entry price' : "strategy's stop (entry price if none)"}; max slippage ${live.maxSlippagePercent ?? 3}%; daily loss limit ${live.dailyLossLimitPercent === undefined ? 'off' : `${live.dailyLossLimitPercent}% of the day's starting equity (day from 06:00 UTC)`}; account leverage at most ${live.maxLeverage}x; max position ${live.maxPositionUsdc === undefined ? 'off' : `${live.maxPositionUsdc} USDC per market`}`;
+      })()}</li>}
+      {detail.live
+        ? <li><span>Execution</span> real orders on Lighter, sent at once with no modeled delay; take-profits and stops are held by the engine and sent when the price reaches them, and each open position also has a reduce-only stop on Lighter; positions are compared with the Lighter account every 10 s. Stop closes every position at market. Real money.</li>
+        : <li><span>Execution</span> market orders 200 ms after the decision; limit orders when the price reaches them; stops and stop-losses trigger on the live best price and execute 300 ms later; partial fills are real. Every Paper order takes liquidity from the order book, so the taker fee is charged on every fill (the maker fee is listed for reference). Funding is not counted. Virtual money only.</li>}
     </ul>
   </Wrapper>;
 }
@@ -121,7 +143,9 @@ export function PaperPositionsTable({ detail }: { detail: PaperExperimentDetail 
   const waiting = new Set(dataGapTracks(detail).map((track) => `${track.venue}:${track.market}`));
   const runtime = detail.runtime;
   if (!runtime) return <section className="paper-activity-panel"><div className="paper-card-title"><div><span className="eyebrow">PORTFOLIO</span><h2>Open positions</h2></div></div><p className="paper-activity-empty">No account snapshot yet.</p></section>;
-  const groups = detail.accounts.map((account) => {
+  // A Live run trades one real Lighter account; its start balance is not the virtual one.
+  const live = Boolean(detail.live);
+  const groups = detail.accounts.filter((account) => !live || detail.tracks.some((track) => track.venue === account.venue)).map((account) => {
     const observed = runtime.accounts.find((entry) => entry.venue === account.venue && entry.accountId === account.accountId);
     const cash = Number(observed?.cashBalance ?? account.startingCash);
     const positions = observed?.positions ?? [];
@@ -139,9 +163,10 @@ export function PaperPositionsTable({ detail }: { detail: PaperExperimentDetail 
         <tr className="paper-positions-venue"><td colSpan={8}>
           <strong>{account.venue}</strong>
           <span>Balance <b>{cash.toLocaleString(undefined, { maximumFractionDigits: 2 })} {account.currency}</b></span>
-          <span>Realized <b className={pnlClass(realized)}>{signedNumber(realized)}</b></span>
+          {!live && <span>Realized <b className={pnlClass(realized)}>{signedNumber(realized)}</b></span>}
           <span>Unrealized <b className={pnlClass(unrealized)}>{signedNumber(unrealized)}</b></span>
-          <span>Total PnL <b className={pnlClass(total)}>{signedNumber(total)} ({signedNumber(account.startingCash ? total / account.startingCash * 100 : 0)}%)</b></span>
+          {live ? <span className="paper-live-badge">LIVE — real Lighter account</span>
+            : <span>Total PnL <b className={pnlClass(total)}>{signedNumber(total)} ({signedNumber(account.startingCash ? total / account.startingCash * 100 : 0)}%)</b></span>}
         </td></tr>
         {positions.length === 0
           ? <tr><td colSpan={8} className="paper-positions-none">No open positions</td></tr>
@@ -176,8 +201,9 @@ export function PaperRunTrackTable({ detail }: { detail: PaperExperimentDetail }
 }
 
 /** Do not infer an engine for historical runs whose owner never reported one. */
-export function PaperRunEngineLabel({ engine }: { engine?: PaperExperimentRuntimeView['engine'] }) {
+export function PaperRunEngineLabel({ engine, live = false }: { engine?: PaperExperimentRuntimeView['engine']; live?: boolean }) {
   if (engine !== 'nautilus') return null;
+  if (live) return <div><span>Engine <InfoTooltip label="Live execution engine" en="Nautilus sends this run's real orders to your Lighter account and reads the real balance and positions." ru="Nautilus отправляет настоящие заявки этого прогона на ваш счёт Lighter и читает настоящие баланс и позиции." /></span><strong>Nautilus · LIVE on Lighter</strong></div>;
   return <div><span>Paper engine <InfoTooltip label="Paper execution engine" en="Nautilus Sandbox simulates orders and keeps the virtual account for this run. It does not place real exchange orders. The saved Pine code remains a historical backtest reference; funding is excluded." ru="Nautilus Sandbox моделирует заявки и ведёт виртуальный счёт этого прогона. Реальные заявки на биржу не отправляются. Сохранённый Pine-код остаётся историческим ориентиром бэктеста; funding не учитывается." /></span><strong>Nautilus Sandbox</strong></div>;
 }
 
@@ -227,12 +253,14 @@ export function PaperRunHistory({ experiments, onOpen }: {
     <div className="table-wrap"><table className="paper-run-table paper-history-table">
       <thead><tr><th>Strategy</th><th>Status</th><th>Venues</th><th>Markets</th><th>Timeframe</th><th>Tracks</th><th>Capital / venue <InfoTooltip label="paper starting capital per venue" en="Initial virtual USDC balance assigned separately to each exchange when the run started. This is not a current account balance." ru="Начальный условный баланс в USDC, отдельно выделенный каждой бирже при запуске. Это не текущий остаток счёта." /></th><th>Started</th><th>Duration <InfoTooltip label="paper run duration" en="Elapsed time from the start until the end of the run. For an active run this grows while the page refreshes. A run that never started has no duration." ru="Время от начала до окончания сеанса. У активного сеанса оно увеличивается при обновлении страницы. Если сеанс не начался, длительности нет." /></th><th>Ended</th></tr></thead>
       <tbody>{experiments.map((item) => <tr key={item.id} className="paper-history-row" tabIndex={0} aria-label={`Open run of ${item.strategyName}`}
-        onClick={() => onOpen(item.id)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpen(item.id); } }}><td><strong>{item.strategyName}</strong></td><td><strong>{visibleStatus(item)}</strong></td><td>{item.venues?.join(', ') || '—'}</td><td>{marketNames(item.markets)}</td><td>{item.timeframe ?? '—'}</td><td>{item.trackCount}</td><td>{item.capitalPerVenue == null ? '—' : `${item.capitalPerVenue.toLocaleString()} USDC`}</td><td>{formatDate(item.startedAt)}</td><td>{formatDuration(item)}</td><td>{formatDate(item.endedAt)}</td></tr>)}</tbody>
+        onClick={() => onOpen(item.id)} onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); onOpen(item.id); } }}><td><strong>{item.strategyName}</strong>{item.live && <> <span className="paper-live-badge">LIVE</span></>}</td><td><strong>{visibleStatus(item)}</strong></td><td>{item.venues?.join(', ') || '—'}</td><td>{marketNames(item.markets)}</td><td>{item.timeframe ?? '—'}</td><td>{item.trackCount}</td><td>{item.live ? 'real' : item.capitalPerVenue == null ? '—' : `${item.capitalPerVenue.toLocaleString()} USDC`}</td><td>{formatDate(item.startedAt)}</td><td>{formatDuration(item)}</td><td>{formatDate(item.endedAt)}</td></tr>)}</tbody>
     </table></div>
   </section>;
 }
 
-export function PaperRunActivity({ activity, loading, refreshFailed, pageIndex, onPrevious, onNext, initiallyExpanded = false }: {
+export function PaperRunActivity({ activity, loading, refreshFailed, pageIndex, onPrevious, onNext, initiallyExpanded = false, live = false }: {
+  /** A Live run: the trades are real fills on Lighter. */
+  live?: boolean;
   activity: PaperExperimentActivity | null;
   loading: boolean;
   refreshFailed: boolean;
@@ -259,10 +287,12 @@ export function PaperRunActivity({ activity, loading, refreshFailed, pageIndex, 
       {events.length > EVENTS_COLLAPSED && <button type="button" className="paper-text-button paper-events-toggle" onClick={() => setExpanded((value) => !value)}>{expanded ? `Show the latest ${EVENTS_COLLAPSED} only` : `Show all ${events.length} events`}</button>}
     </section>
     <section className="paper-activity-panel" aria-labelledby="paper-fills-title">
-      <div className="paper-card-title"><div><span className="eyebrow">EXECUTION HISTORY</span><h2 id="paper-fills-title">Virtual trades <InfoTooltip label="paper virtual trades" en="Every committed virtual fill can be browsed here, 20 at a time. Entry and exit fills are separate rows. They are simulations, not real exchange orders. Realized PnL is shown only when the execution engine supplies it; funding is excluded." ru="Здесь можно просмотреть все записанные условные исполнения по 20 на странице. Вход и выход показаны отдельными строками. Это симуляция, а не реальные заявки на бирже. Реализованный PnL показан только там, где движок передал его; funding не учитывается." /></h2><p>{!activity ? 'Loading saved fills…' : activity.totalFills === null ? 'Saved fills from available journals' : `${activity.totalFills} committed virtual fills`}</p></div></div>
-      {loading ? <p className="paper-activity-empty">Loading virtual trades…</p>
-        : !activity ? <p className="paper-activity-empty">Virtual trade history is unavailable.</p>
-          : fills.length === 0 ? <p className="paper-activity-empty">{activity.coverage === 'durable_journal' ? 'No virtual trades were executed in this run.' : 'No virtual trades found in the available journal history.'}</p>
+      <div className="paper-card-title"><div><span className="eyebrow">EXECUTION HISTORY</span><h2 id="paper-fills-title">{live ? <>Trades on Lighter <InfoTooltip label="Live trades" en="Every real fill of this run on Lighter, 20 at a time. Entry and exit fills are separate rows. Fees are the ones Lighter charged; funding is not included in the realized PnL." ru="Все настоящие исполнения этого прогона на Lighter, по 20 на странице. Вход и выход — отдельные строки. Комиссии — те, что взял Lighter; funding в реализованный PnL не входит." /></> : <>Virtual trades <InfoTooltip label="paper virtual trades" en="Every committed virtual fill can be browsed here, 20 at a time. Entry and exit fills are separate rows. They are simulations, not real exchange orders. Realized PnL is shown only when the execution engine supplies it; funding is excluded." ru="Здесь можно просмотреть все записанные условные исполнения по 20 на странице. Вход и выход показаны отдельными строками. Это симуляция, а не реальные заявки на бирже. Реализованный PnL показан только там, где движок передал его; funding не учитывается." /></>}</h2><p>{!activity ? 'Loading saved fills…' : activity.totalFills === null ? 'Saved fills from available journals' : `${activity.totalFills} committed virtual fills`}</p></div></div>
+      {loading ? <p className="paper-activity-empty">{live ? 'Loading trades…' : 'Loading virtual trades…'}</p>
+        : !activity ? <p className="paper-activity-empty">{live ? 'Trade history is unavailable.' : 'Virtual trade history is unavailable.'}</p>
+          : fills.length === 0 ? <p className="paper-activity-empty">{activity.coverage === 'durable_journal'
+            ? (live ? 'No trades were executed on Lighter in this run.' : 'No virtual trades were executed in this run.')
+            : (live ? 'No trades found in the available journal history.' : 'No virtual trades found in the available journal history.')}</p>
             : <div className="table-wrap"><table className="paper-run-table paper-fill-table"><thead><tr><th>Time</th><th>Exchange</th><th>Market</th><th>Action</th><th>Side</th><th>Position</th><th>Quantity</th><th>Price</th><th>Value</th><th>Fee</th><th>Realized PnL</th></tr></thead><tbody>{fills.map((fill) => <tr key={fill.id}><td>{formatDate(fill.at)}</td><td>{fill.venue}</td><td>{fill.market}</td><td className="paper-fill-kind">{fill.kind}</td><td>{fill.side}</td><td>{fill.positionSide}</td><td>{fill.quantity}</td><td>{fill.price === null ? '—' : `${fill.price} USDC`}</td><td>{fill.quote} USDC</td><td>{fill.fee === null ? '—' : `${fill.fee} USDC`}</td><td>{fill.realizedPnl === null ? '—' : `${fill.realizedPnl} USDC`}</td></tr>)}</tbody></table></div>}
       {(pageIndex > 0 || activity?.nextFillsCursor) && <div className="paper-fill-pagination"><span>{activity ? `${fills.length ? `${first}–${last}` : '0'}${activity.totalFills === null ? ' shown' : ` of ${activity.totalFills}`}` : 'Page unavailable'}</span><button type="button" className="paper-text-button" disabled={pageIndex === 0} onClick={onPrevious}>Previous</button><button type="button" className="paper-text-button" disabled={!activity?.nextFillsCursor} onClick={onNext}>Next</button></div>}
     </section>
@@ -357,6 +387,7 @@ export function PaperRuns({ onPrepare }: { onPrepare: () => void }) {
 
   const stopRun = async () => {
     if (!selectedId || stopBusy) return;
+    if (detail?.live && !window.confirm('Stop this LIVE run? Every open position is closed at market on Lighter.')) return;
     setStopBusy(true);
     setStopError('');
     try {
@@ -391,25 +422,26 @@ export function PaperRuns({ onPrepare }: { onPrepare: () => void }) {
             markets={[...new Set(detail.tracks.filter((track) => track.venue === 'Hyperliquid' && isXyzMarket(track.market)).map((track) => track.market))]} />}
           <PaperPositionsTable detail={detail} />
           <section className="paper-activity-panel paper-run-overview" aria-labelledby="paper-run-title">
-            <div className="paper-run-detail-header"><div><span className="eyebrow">EXPERIMENT / {detail.id}</span><h2 id="paper-run-title">{detail.strategyName}</h2><p>Status: <strong>{visibleStatus(detail)}</strong>{visibleStatus(detail) === 'Stop needs attention' && <> <InfoTooltip label="stop needs attention" en="The server could not confirm that shutdown finished. This experiment may still block a new launch. Try Retry stop after the runtime issue is resolved." ru="Сервер не смог подтвердить завершение остановки. Этот эксперимент может блокировать новый запуск. После устранения проблемы можно повторить остановку." /></>}</p></div>{canStop && <button className="paper-text-button paper-stop-button" type="button" disabled={stopBusy} onClick={() => { void stopRun(); }}>{stopBusy ? 'Stopping…' : detail.status === 'stopping' ? 'Retry stop' : 'Stop experiment'}</button>}</div>
+            <div className="paper-run-detail-header"><div><span className="eyebrow">EXPERIMENT / {detail.id}</span><h2 id="paper-run-title">{detail.strategyName}{detail.live && <> <span className="paper-live-badge">LIVE — real money · Lighter</span></>}</h2><p>Status: <strong>{visibleStatus(detail)}</strong>{visibleStatus(detail) === 'Stop needs attention' && <> <InfoTooltip label="stop needs attention" en="The server could not confirm that shutdown finished. This experiment may still block a new launch. Try Retry stop after the runtime issue is resolved." ru="Сервер не смог подтвердить завершение остановки. Этот эксперимент может блокировать новый запуск. После устранения проблемы можно повторить остановку." /></>}</p></div>{canStop && <button className="paper-text-button paper-stop-button" type="button" disabled={stopBusy} onClick={() => { void stopRun(); }}>{stopBusy ? 'Stopping…' : detail.status === 'stopping' ? 'Retry stop' : detail.live ? 'Stop and close all' : 'Stop experiment'}</button>}</div>
             {canStop && <NativeRunNotice detail={detail} />}
+            <LiveStopOutcome detail={detail} />
             <div className="paper-run-summary"><div><span>Started</span><strong>{formatDate(detail.startedAt)}</strong></div>{detail.endedAt ? <div><span>Ended</span><strong>{formatDate(detail.endedAt)}</strong></div> : <div><span>Running for</span><strong>{formatDuration(detail)}</strong></div>}<div><span>Timeframe</span><strong>{detail.settings.timeframe}</strong></div><PaperRunHealth detail={detail} /></div>
             <PaperRunRules detail={detail} inOverview />
           </section>
-          <PaperRunActivity activity={activity} loading={activity === null && !activityRefreshFailed} refreshFailed={activityRefreshFailed} pageIndex={fillPageIndex} onPrevious={previousFillPage} onNext={nextFillPage} />
+          <PaperRunActivity live={Boolean(detail.live)} activity={activity} loading={activity === null && !activityRefreshFailed} refreshFailed={activityRefreshFailed} pageIndex={fillPageIndex} onPrevious={previousFillPage} onNext={nextFillPage} />
           <details className="paper-tech-details"><summary>Technical details</summary>
-          <div className="paper-account-grid">{detail.accounts.map((account) => {
+          <div className="paper-account-grid">{detail.accounts.filter((account) => !detail.live || detail.tracks.some((track) => track.venue === account.venue)).map((account) => {
             const accountTracks = detail.tracks.filter((track) => track.accountId === account.accountId);
             const runtime = detail.runtime;
             const observed = runtime?.accounts.find((entry) => entry.accountId === account.accountId && entry.runId === account.runId && entry.venue === account.venue);
             return <div key={account.accountId}>
               <span>{account.venue} shared account · {accountTracks.length} {accountTracks.length === 1 ? 'market' : 'markets'}</span>
-              <strong>{account.startingCash.toLocaleString()} {account.currency} starting cash</strong>
+              <strong>{detail.live ? 'Real Lighter account' : `${account.startingCash.toLocaleString()} ${account.currency} starting cash`}</strong>
               <ul className="paper-account-markets">{accountTracks.map((track) => <li key={track.trackId}><span>{track.market}</span><strong>{statusLabel[track.status]}</strong></li>)}</ul>
               {runtime && observed ? <>
                 <small>Owner snapshot: {formatDate(runtime.observedAt)} · {statusLabel[runtime.stage]}{refreshError ? ' · refresh failed; values may be old' : ''}</small>
                 <div className="paper-account-metrics">
-                  <div><span>Virtual cash at snapshot</span><strong>{observed.cashBalance} {account.currency}</strong></div>
+                  <div><span>{detail.live ? 'Lighter balance at snapshot' : 'Virtual cash at snapshot'}</span><strong>{observed.cashBalance} {account.currency}</strong></div>
                   <div><span>Pending orders</span><strong>{observed.pendingOrders}</strong></div>
                   <div><span>Broker revision</span><strong>{observed.brokerRevision}</strong></div>
                   <div><span>Public frames</span><strong>{observed.publicFrames}</strong></div>
@@ -424,7 +456,7 @@ export function PaperRuns({ onPrepare }: { onPrepare: () => void }) {
               <small title={account.accountId}>Account {account.accountId.slice(0, 12)}… · run {account.runId.slice(0, 12)}…</small>
             </div>;
           })}</div>
-          <div className="paper-run-summary"><PaperRunEngineLabel engine={detail.runtime?.engine} /><div><span>Strategy code SHA-256</span><strong title={detail.sourceSha256}>{detail.sourceSha256.slice(0, 12)}…</strong></div></div>
+          <div className="paper-run-summary"><PaperRunEngineLabel engine={detail.runtime?.engine} live={Boolean(detail.live)} /><div><span>Strategy code SHA-256</span><strong title={detail.sourceSha256}>{detail.sourceSha256.slice(0, 12)}…</strong></div></div>
           <PaperRunTrackTable detail={detail} />
           <p className="paper-card-footnote">Status and counters are the server's last report{refreshError ? ', not a live reading while refresh is failing' : ''}. Starting cash is the initial balance; an owner snapshot is shown only when available. <InfoTooltip label="reported paper metrics" en="Public frames count accepted public observations, not proof of fresh data. Current Nautilus rows report each market separately; account counters combine the selected markets. Historical owners may repeat venue counters across rows. Price readiness is sampled at snapshot time, and skipped observations are not source-gap counts. Signals, approved order intents, fills and rejected signals come from committed virtual Broker journal operations, not real exchange trades. Nautilus keeps its last committed virtual cash, positions and pending orders snapshot after Stop or process death; older runs may have no retained snapshot. Last control update is not the time of the latest market event. The event list contains key milestones, and all recorded virtual fills can be browsed below. Funding is excluded from this pilot." ru="Public frames — принятые публичные наблюдения, а не доказательство свежести данных. Текущий Nautilus показывает каждый рынок отдельно; счётчики счёта объединяют выбранные рынки. В старых прогонах биржевые счётчики могут повторяться в строках рынков. Готовность цены показана на момент снимка; пропуски наблюдений не равны разрывам потока. Сигналы, одобренные намерения отправить заявку, исполнения и отклонённые сигналы взяты из записанных операций виртуального брокера, а не из реальных сделок на бирже. Nautilus сохраняет последний записанный снимок условного остатка, открытых позиций и ожидающих заявок после Stop или гибели процесса; у старых прогонов сохранённого снимка может не быть. Последнее обновление управления не означает время последнего рыночного события. Список событий содержит основные этапы, а все записанные условные исполнения можно просмотреть ниже. Funding в этом пилоте не учитывается." /></p>
           </details>

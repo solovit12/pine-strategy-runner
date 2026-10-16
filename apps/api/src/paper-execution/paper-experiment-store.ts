@@ -5,6 +5,7 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 import {
+  LIVE_ALREADY_ACTIVE_MESSAGE,
   MAX_CONCURRENT_PAPER_EXPERIMENTS,
   type PaperExperimentDetail,
   type PaperExperimentAccount,
@@ -105,6 +106,7 @@ function summary(row: ExperimentRow, settings: PaperStrategySettings = readSetti
     markets: [...new Set(settings.tracks.map((track) => track.market))],
     timeframe: settings.timeframe,
     capitalPerVenue: 'capitalPerVenue' in settings ? settings.capitalPerVenue : null,
+    ...('live' in settings && settings.live ? { live: true } : {}),
   };
 }
 
@@ -250,6 +252,20 @@ export class PaperExperimentStoreV1 {
     return active?.id ?? null;
   }
 
+  /** The active run that trades real money, if any: one at a time (one Lighter account and API key). */
+  activeLiveExperimentId(): string | null {
+    const rows = this.#db.prepare(`SELECT id, settings_json FROM paper_experiments
+      WHERE status IN (${ACTIVE_STATUSES.map(() => '?').join(',')})`)
+      .all(...ACTIVE_STATUSES) as Array<{ id: string; settings_json: string }>;
+    return rows.find((row) => {
+      try {
+        return Boolean((JSON.parse(row.settings_json) as { live?: unknown }).live);
+      } catch {
+        return false;
+      }
+    })?.id ?? null;
+  }
+
   activeExperimentCount(): number {
     const row = this.#db.prepare(`SELECT COUNT(*) AS count FROM paper_experiments
       WHERE status IN (${ACTIVE_STATUSES.map(() => '?').join(',')})`)
@@ -372,6 +388,10 @@ export class PaperExperimentStoreV1 {
       }
       if (this.activeExperimentCount() >= MAX_CONCURRENT_PAPER_EXPERIMENTS) {
         throw new PaperExperimentStoreError('EXPERIMENT_LIMIT', `${MAX_CONCURRENT_PAPER_EXPERIMENTS} Paper experiments are already active.`);
+      }
+      // Checked inside the same transaction, so two simultaneous Live launches cannot both pass.
+      if ('live' in input.request.settings && input.request.settings.live && this.activeLiveExperimentId()) {
+        throw new PaperExperimentStoreError('EXPERIMENT_LIMIT', LIVE_ALREADY_ACTIVE_MESSAGE);
       }
       const count = this.#db.prepare('SELECT COUNT(*) AS count FROM paper_experiments').get() as { count: number };
       if (count.count >= MAX_EXPERIMENT_HISTORY) {

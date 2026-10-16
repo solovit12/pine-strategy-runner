@@ -18,8 +18,12 @@ function isAlive(pid: number): boolean {
  * reconnects, and the runtime's own gap recovery pauses and resumes or fails the run.
  * Neither is a Lighter book subscription cancelled while it awaited the venue's reply: the
  * runtime's resubscribe of a market without data replaces it with a new subscription.
+ * In Live, the Lighter client's order lines (a refused order, a refused cancel) are not fatal
+ * either: the same refusal reaches the engine as an order event, and the engine decides by
+ * Lighter's error code whether to pause, count or halt (docs/LIVE_TRADING_DESIGN.md).
  */
-export function isFatalNautilusLogLine(line: string): boolean {
+export function isFatalNautilusLogLine(line: string, live = false): boolean {
+  if (live && /\[ERROR\] \S*\.nautilus_lighter::(execution|websocket)/.test(line)) return false;
   if (/nautilus_network::websocket::client: Received transport error, terminating/.test(line)) return false;
   if (/Failed to subscribe to Lighter book deltas: Client\("subscription cancelled before venue acknowledgement/.test(line)) return false;
   return /\[ERROR\]|InvalidStateTrigger|Traceback \(most recent call last\)/.test(line);

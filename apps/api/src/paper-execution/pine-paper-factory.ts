@@ -80,6 +80,11 @@ export const SETTLE_MS: Record<PaperVenueKey, number> = { hyperliquid: 500, ligh
 const BOUNDARY_TICK_MS = 250;
 /** Without a new candle (no trades) the previous orders are re-confirmed after this. */
 const NO_CANDLE_RELEASE_MS = 20_000;
+/**
+ * A Live stop closes positions at market, re-sending the rest for up to 30 s, then the node
+ * stops (up to 20 s): the process is never killed while it is still closing real positions.
+ */
+const LIVE_STOP_GRACE_MS = 75_000;
 
 export interface PinePaperFactoryOptions {
   readonly projectRoot: string;
@@ -89,6 +94,10 @@ export interface PinePaperFactoryOptions {
   readonly hyperliquidFastBook?: boolean;
   /** Absolute paths of private strategy packs (PSR_STRATEGY_PACKS). */
   readonly strategyPacks?: readonly string[];
+  /** Live trading with real money is switched on and a key is saved on this machine. */
+  readonly liveTrading?: boolean | (() => boolean);
+  /** Folder with the Lighter credentials file the engine reads. */
+  readonly liveSecretsDir?: string;
   readonly dependencies?: {
     readonly listStrategies?: () => Promise<{ strategies: PythonStrategyInfo[] }>;
     readonly catalog?: (venue: PaperVenueKey, signal: AbortSignal) => Promise<VenueMarket[]>;
@@ -143,6 +152,8 @@ interface Actor {
   stopPromise: Promise<StopProof> | null;
   stopping: boolean;
   failure: string | null;
+  /** The engine's own final stop reason (a Live run ends it with the closes' outcome). */
+  engineStopReason: string | null;
   seq: number;
   childSeq: number;
   logBytes: number;
@@ -163,6 +174,18 @@ export function candleRevisionMessage(seen: Candle, later: Candle): string | nul
   if (!revised.length) return null;
   return `Candle ${new Date(seen.openTime).toISOString()} was revised by the venue after the strategy used it: `
     + `${revised.map(field => `${field} ${seen[field]} -> ${later[field]}`).join('; ')}.`;
+}
+
+/**
+ * Final reason of a Live run: why it stopped, then the engine's own outcome of the closes ("every
+ * position of this run is closed" or which positions are still open). Without that outcome (the
+ * engine had to be ended) the owner is told to check the Lighter app.
+ */
+export function liveStopReason(failure: string | null, engineStopReason: string | null): string {
+  const outcome = engineStopReason?.match(/LIVE: (every position of this run is closed|positions still open)[^]*$/)?.[0]
+    ?? 'LIVE: the engine did not confirm how the closes ended; check the positions in the Lighter app.';
+  const base = failure ?? 'Stopped by user.';
+  return base.includes(outcome) ? base : `${base} ${outcome}`;
 }
 
 export function isPineLiveSettings(settings: Proposed['settings']): settings is Proposed['settings'] & PineLivePaperSettingsV1 {
@@ -224,6 +247,15 @@ export function createPinePaperFactory(options: PinePaperFactoryOptions): PaperE
     return found;
   }
   const env = { PATH: process.env.PATH, LANG: 'en_US.UTF-8', PYTHONUNBUFFERED: '1' };
+  // A Live run's engine reads the Lighter key itself from the closed server file.
+  const liveSecretsDir = options.liveSecretsDir ?? process.env.PSR_LIVE_SECRETS_DIR;
+  const liveEnv = { ...env, PSR_LIVE_ENABLED: '1', ...(liveSecretsDir ? { PSR_LIVE_SECRETS_DIR: liveSecretsDir } : {}) };
+  const liveAllowed = () => (typeof options.liveTrading === 'function' ? options.liveTrading() : options.liveTrading === true);
+  function assertLive(settings: LiveSettings): void {
+    if (!settings.live) return;
+    if (!liveAllowed()) throw new Error('Live trading is not enabled on this engine.');
+    if (settings.tracks.some(track => track.venue !== 'Lighter')) throw new Error('Live trading supports Lighter markets only.');
+  }
   const catalogFor = options.dependencies?.catalog ?? ((venue, signal) => fetchVenueCatalog(venue, { signal }));
   const candlesFor = options.dependencies?.candles
     ?? ((market, settings, fromMs, toMs, signal) => fetchClosedCandles(market, settings.timeframe, fromMs, toMs, { signal, now }));
@@ -271,12 +303,15 @@ export function createPinePaperFactory(options: PinePaperFactoryOptions): PaperE
     actor.abort.abort();
     if (actor.timer) clearInterval(actor.timer);
     actor.stopPromise = (async () => {
-      try { record(actor, { type: 'phase', stage: 'stopping', message: actor.failure ?? 'Stop requested; closing both virtual accounts.' }); } catch { /* still stop */ }
+      try {
+        record(actor, { type: 'phase', stage: 'stopping', message: actor.failure ?? (actor.settings.live
+          ? 'Stop requested; LIVE: closing every position on Lighter at market.' : 'Stop requested; closing both virtual accounts.') });
+      } catch { /* still stop */ }
       await Promise.race([Promise.allSettled([actor.task, actor.loop]), new Promise(resolve => setTimeout(resolve, 3_000))]);
       actor.pine?.close();
       if (actor.child && !actor.exited) {
         try { writeChild(actor, { cmd: 'stop', reason: actor.failure ?? 'user' }); } catch { /* escalate below */ }
-        if (!await waitExit(actor, options.dependencies?.stopGraceMs ?? 10_000)) {
+        if (!await waitExit(actor, options.dependencies?.stopGraceMs ?? (actor.settings.live ? LIVE_STOP_GRACE_MS : 10_000))) {
           actor.failure ??= 'Nautilus did not acknowledge Stop; its process was terminated.';
           actor.child.kill('SIGTERM');
           if (!await waitExit(actor, 3_000)) {
@@ -285,7 +320,9 @@ export function createPinePaperFactory(options: PinePaperFactoryOptions): PaperE
           }
         }
       }
-      let reason = actor.failure ?? 'Stopped by user. Any open virtual positions remain in the audit snapshot; no automatic liquidation or resume.';
+      let reason = actor.settings.live
+        ? liveStopReason(actor.failure, actor.engineStopReason)
+        : actor.failure ?? 'Stopped by user. Any open virtual positions remain in the audit snapshot; no automatic liquidation or resume.';
       try { record(actor, { type: 'stopped', reason }); }
       catch (error) { reason += `; could not write final event: ${message(error)}`; }
       owner(actor);
@@ -304,7 +341,7 @@ export function createPinePaperFactory(options: PinePaperFactoryOptions): PaperE
 
   function accept(actor: Actor, line: string): void {
     if (!line.startsWith('PSR_EVENT=')) {
-      if (isFatalNautilusLogLine(line)) fail(actor, `Nautilus runtime error: ${line.slice(0, 800)}`);
+      if (isFatalNautilusLogLine(line, Boolean(actor.settings.live))) fail(actor, `Nautilus runtime error: ${line.slice(0, 800)}`);
       return;
     }
     const raw = JSON.parse(line.slice('PSR_EVENT='.length)) as Record<string, unknown>;
@@ -336,8 +373,9 @@ export function createPinePaperFactory(options: PinePaperFactoryOptions): PaperE
       notify(actor, { status: raw.stage });
     } else if (raw.type === 'failure') {
       fail(actor, typeof raw.message === 'string' ? raw.message : 'Nautilus reported an error.');
-    } else if (raw.type === 'stopped' && !actor.stopping) {
-      fail(actor, typeof raw.reason === 'string' ? raw.reason : 'Nautilus stopped unexpectedly.');
+    } else if (raw.type === 'stopped') {
+      if (typeof raw.reason === 'string') actor.engineStopReason = raw.reason;
+      if (!actor.stopping) fail(actor, typeof raw.reason === 'string' ? raw.reason : 'Nautilus stopped unexpectedly.');
     }
   }
 
@@ -568,13 +606,27 @@ export function createPinePaperFactory(options: PinePaperFactoryOptions): PaperE
         minticks: Object.fromEntries(actor.tracks.map(track => [track.key, String(track.mintick)])),
         maxQuoteAgeMs: 1000, maxBookAgeMs: 1000, maxVenueSourceAgeMs: 2000, maxTrackQuietMs: 30_000,
         mode: 'public', hyperliquidFastBook,
+        ...(settings.live ? { live: {
+          exchange: 'lighter',
+          ...(settings.live.dailyLossLimitPercent !== undefined
+            ? { dailyLossLimitPercent: String(settings.live.dailyLossLimitPercent) } : {}),
+          // The day's starting equity, kept between runs on this server.
+          stateFile: path.join(options.runtimeDir, 'live-daily-reference.json'),
+          maxLeverage: String(settings.live.maxLeverage),
+          exchangeStopPercent: String(settings.live.exchangeStopPercent), exchangeStopFrom: settings.live.exchangeStopFrom,
+          ...(settings.live.maxSlippagePercent !== undefined ? { maxSlippagePercent: String(settings.live.maxSlippagePercent) } : {}),
+          ...(settings.live.maxPositionUsdc !== undefined ? { maxPositionUsdc: String(settings.live.maxPositionUsdc) } : {}),
+          ...(settings.live.minimumOrderSize ? { minimumOrderSize: true } : {}),
+        } } : {}),
       };
       const configFile = path.join(actor.directory, 'nautilus-config.json');
       writeFileSync(configFile, JSON.stringify(config) + '\n', { flag: 'wx', mode: 0o600 });
-      record(actor, { type: 'phase', stage: 'waiting_for_data', message: 'Starting Nautilus with two virtual USDC accounts and public market data.' });
+      record(actor, { type: 'phase', stage: 'waiting_for_data', message: settings.live
+        ? 'LIVE: starting Nautilus with the real Lighter account and public market data.'
+        : 'Starting Nautilus with two virtual USDC accounts and public market data.' });
       actor.view = { ...actor.view, stage: 'waiting_for_data' };
       const child = options.dependencies?.spawn?.(configFile) ?? spawn(python, [script, '--config', configFile], {
-        cwd: options.projectRoot, env, stdio: ['pipe', 'pipe', 'pipe'],
+        cwd: options.projectRoot, env: settings.live ? liveEnv : env, stdio: ['pipe', 'pipe', 'pipe'],
       });
       attach(actor, child);
       actor.lastMessageAt = now();
@@ -602,7 +654,7 @@ export function createPinePaperFactory(options: PinePaperFactoryOptions): PaperE
   return {
     admissionLimits: { maxTracksPerVenue: 10, maxTracksPerExperiment: 20 },
     async preflight(input) {
-      assertInput(input);
+      assertLive(assertInput(input));
       const catalog = new StrategyCatalogV1(options.catalogDir);
       try {
         const saved = catalog.get(input.strategyId, input.strategyVersion)?.version;
@@ -620,6 +672,7 @@ export function createPinePaperFactory(options: PinePaperFactoryOptions): PaperE
     },
     async start(snapshot, report) {
       const settings = assertInput(snapshot);
+      assertLive(settings);
       if (actors.has(snapshot.experimentId)) throw new Error('This Paper factory already owns this run.');
       const pythonInfo = settings.accountModel === 'python_live_v1' ? await pythonStrategy(settings.strategyRef) : null;
       const directory = path.join(options.runtimeDir, snapshot.experimentId);
@@ -629,7 +682,7 @@ export function createPinePaperFactory(options: PinePaperFactoryOptions): PaperE
       const actor: Actor = {
         snapshot, settings, python: pythonInfo, directory, ledger, report, abort: new AbortController(), child: null, childExit: null,
         exited: false, pine: null, tracks: [], startMs: 0, task: null, loop: null, timer: null, stopPromise: null,
-        stopping: false, failure: null, seq: 0, childSeq: 0, logBytes: 0, lastMessageAt: now(),
+        stopping: false, failure: null, engineStopReason: null, seq: 0, childSeq: 0, logBytes: 0, lastMessageAt: now(),
         view: { engine: 'nautilus', stage: 'warming_up', fundingTreatment: 'excluded', observedAt: new Date().toISOString(), accounts: [] },
       };
       actors.set(snapshot.experimentId, actor);

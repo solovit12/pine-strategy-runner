@@ -46,11 +46,13 @@ import {
 import { runPineWorker } from './worker-client.js';
 import { BinanceFuturesMarketListService } from './binance-futures-market-list.js';
 import { PaperExperimentControllerV1, type PaperExperimentRuntimeFactory } from './paper-execution/paper-experiment-controller.js';
-import { EDITION, pythonStrategiesAvailable, type Edition } from '../../../packages/shared/src/edition.js';
+import { EDITION, liveTradingAvailable, pythonStrategiesAvailable, type Edition } from '../../../packages/shared/src/edition.js';
 import { createNativePaperFactory } from './paper-execution/native-strategies.js';
 import { createPaperRuntimeRouter, createPinePaperFactory } from './paper-execution/pine-paper-factory.js';
 import { fetchVenueVolumes, type PaperVenueKey } from './paper-execution/venue-markets.js';
 import { isCrossOriginPaperWrite, registerPaperRoutes } from './paper-routes.js';
+import { registerLiveRoutes } from './live-routes.js';
+import { LiveSettingsStore } from './live-settings.js';
 import {
   DEFAULT_ENGINE_URL, ENGINE_TOKEN_HEADER, engineStatus, engineTokenMatches, readEngineToken, registerEngineProxy,
   type EngineConnection,
@@ -110,6 +112,10 @@ export interface BuildAppOptions {
   engine?: EngineConnection;
   /** Defaults to this build's edition; tests pass the other one. */
   edition?: Edition;
+  /** Where Live trading credentials are kept (default: `live-secrets` next to the Paper history). */
+  liveSecretsDir?: string;
+  /** A server-managed closed folder with the same credentials file, read as a fallback (null: none). */
+  liveServerSecretsDir?: string | null;
 }
 
 function positiveInteger(value: string | undefined, fallback: number, name: string): number {
@@ -276,6 +282,13 @@ export async function buildApp(options: BuildAppOptions = {}) {
     : options.paperRunsDir ?? process.env.PAPER_RUNS_DIR ?? path.join(projectRoot, '.local', 'paper-runs');
   const edition = options.edition ?? EDITION;
   const pythonStrategies = pythonStrategiesAvailable(edition);
+  // Live trading: switched on and a Lighter key saved on this machine (the setup page), unless the
+  // server operator switched it off. The key stays in this folder; the engine reads it from there.
+  const liveSecretsDir = options.liveSecretsDir ?? process.env.PSR_LIVE_SECRETS_DIR
+    ?? (paperExperimentsDir ? path.join(path.dirname(paperExperimentsDir), 'live-secrets') : path.join(projectRoot, '.local', 'live-secrets'));
+  const liveSettings = role === 'site' ? null : new LiveSettingsStore(liveSecretsDir,
+    options.liveServerSecretsDir === undefined ? '/etc/psr-secrets' : options.liveServerSecretsDir);
+  const liveTrading = () => liveTradingAvailable(edition) && Boolean(liveSettings?.liveTrading());
   // Private Python strategy packs: absolute folders, never part of this repository.
   const strategyPacks = !pythonStrategies ? [] : (process.env.PSR_STRATEGY_PACKS ?? '').split(path.delimiter)
     .map((value) => value.trim()).filter(Boolean).map((value) => path.resolve(value));
@@ -295,13 +308,14 @@ export async function buildApp(options: BuildAppOptions = {}) {
           pythonPath: nautilusPython,
           hyperliquidFastBook: true,
         };
-        return createPaperRuntimeRouter(createNativePaperFactory(shared), createPinePaperFactory({ ...shared, strategyPacks }));
+        return createPaperRuntimeRouter(createNativePaperFactory(shared),
+          createPinePaperFactory({ ...shared, strategyPacks, liveTrading, liveSecretsDir }));
       })()
       : null;
   if (paperRuntimeFactory && strategyCatalogDir) getStrategyCatalog();
   const paperExperiments = role === 'site' ? null : new PaperExperimentControllerV1({
     directory: paperExperimentsDir, catalogConfigured: Boolean(strategyCatalogDir),
-    runtimeFactory: paperRuntimeFactory, now, pythonStrategies,
+    runtimeFactory: paperRuntimeFactory, now, pythonStrategies, liveTrading,
   });
   app.addHook('onClose', async () => { await paperExperiments?.close(); strategyCatalog?.close(); });
   const paperStatus = async () => paperExperiments
@@ -403,6 +417,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     registerPaperRoutes(app, {
       paperExperiments, paperRuntimeFactory, paperRunsDir, strategyPacks, nautilusPython, projectRoot, getStrategyCatalog, pythonStrategies,
     });
+    if (liveSettings) registerLiveRoutes(app, { store: liveSettings, paperExperiments, nautilusPython, projectRoot });
   } else if (engine) {
     registerEngineProxy(app, engine);
   }

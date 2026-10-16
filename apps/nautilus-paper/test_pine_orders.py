@@ -153,6 +153,23 @@ class PineOrdersTest(unittest.TestCase):
         self.m.exec_result(flat.id, filled="2", average="99.9", opened="0", now_ms=T0 + H + 20)
         self.assertEqual(self.m.real_position(), Decimal("0"))
 
+    def test_late_fill_opening_is_flattened_and_closing_shrinks_the_trades(self):
+        """Live: a fill after its order ended. What it opened is flattened; what it closed comes off the trades."""
+        self.send([entry()])
+        self.m.on_quote("99.9", "100.1", T0 + ARRIVAL_MS)
+        [request] = self.m.take_requests()
+        self.fill_entry(request, "2", "100", T0 + 210)
+        self.m.late_fill("buy", closing="0", opening="0.5")  # the entry's late remainder
+        self.assertEqual(self.m.real_position(), Decimal("2.5"))
+        [flatten] = self.m.take_requests()
+        self.assertEqual((flatten.leg_key, flatten.side, flatten.close_qty, flatten.reduce_only),
+                         ("residual:long", "sell", Decimal("0.5"), True))
+        self.m.late_fill("sell", closing="1", opening="0")  # e.g. a stop's late fill: the residual goes first
+        self.assertEqual((self.m.residual_long, self.m.trades[f"L@{T0 + 210}"].real_qty), (Decimal("0"), Decimal("1.5")))
+        self.m.exec_result(flatten.id, filled="0.5", average="99", opened="0", now_ms=T0 + 300)
+        self.assertEqual(self.m.residual_long, Decimal("0"))  # never negative
+        self.assertEqual(self.m.real_position(), Decimal("1.5"))
+
     def test_trailing_stop_arms_and_follows_best_price(self):
         self.send([entry(), bracket(trailPointsTicks=100, trailOffsetTicks=50)])
         self.m.on_quote("99.9", "100", T0 + 300)

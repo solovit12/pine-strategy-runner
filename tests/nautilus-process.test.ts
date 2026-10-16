@@ -40,4 +40,15 @@ describe('Nautilus log lines that stop a Paper run', () => {
     expect(isFatalNautilusLogLine('InvalidStateTrigger: RUNNING -> START')).toBe(true);
     expect(isFatalNautilusLogLine('[WARN] PSR-PAPER-001.nautilus_lighter::websocket::handler: Lighter WS unparsed frame')).toBe(false);
   });
+
+  it('in Live leaves Lighter order refusals to the engine, everything else stays fatal', () => {
+    const refused = '\u001b[1;31m[ERROR] PSR-PAPER-001.nautilus_lighter::websocket::handler: Lighter sendTx rejected: {"code":21739}\u001b[0m';
+    const attributed = '[ERROR] PSR-PAPER-001.nautilus_lighter::execution: LIGHTER_21739: not enough margin to create the order attributed to cloid=O-1';
+    expect(isFatalNautilusLogLine(refused)).toBe(true); // Paper: unchanged
+    expect(isFatalNautilusLogLine(refused, true)).toBe(false);
+    expect(isFatalNautilusLogLine(attributed, true)).toBe(false);
+    expect(isFatalNautilusLogLine('[ERROR] PSR-PAPER-001.nautilus_lighter::data: Failed to subscribe to Lighter book deltas: Client("invalid market")', true)).toBe(true);
+    expect(isFatalNautilusLogLine('[ERROR] PSR-PAPER-001.nautilus_execution::engine: order rejected unexpectedly', true)).toBe(true);
+    expect(isFatalNautilusLogLine('Traceback (most recent call last):', true)).toBe(true);
+  });
 });

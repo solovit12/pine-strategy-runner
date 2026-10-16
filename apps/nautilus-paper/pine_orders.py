@@ -7,7 +7,8 @@ fills back in Pine terms. It never submits orders itself: the Nautilus
 strategy turns ExecRequests into Sandbox IOC orders and reports the result.
 
 Real-time rules (no backtest bar semantics):
-- every order set becomes live ARRIVAL_MS after it is received;
+- every order set becomes live ARRIVAL_MS after it is received (Paper's modeled latency;
+  Live passes zero delays: the real network and exchange are the latency);
 - market orders execute at arrival; resting limits (entries and take-profits)
   execute immediately when the opposite best price touches the limit;
 - stop / stop-limit / stop-loss / trailing legs trigger when the relevant
@@ -103,8 +104,13 @@ class ExecRequest:
 
 
 class PineOrderManager:
-    def __init__(self, track, mintick, log=None):
+    def __init__(self, track, mintick, log=None, *, arrival_ms=ARRIVAL_MS, trigger_delay_ms=TRIGGER_DELAY_MS,
+                 entry_retry_window_ms=ENTRY_RETRY_WINDOW_MS):
         self.track = track
+        # Paper models network and venue latency with these delays; Live sets them to zero.
+        self.arrival_ms = arrival_ms
+        self.trigger_delay_ms = trigger_delay_ms
+        self.entry_retry_window_ms = entry_retry_window_ms
         self.tick = dec(mintick, "mintick")
         if self.tick is None or self.tick <= 0:
             raise ValueError("mintick must be positive")
@@ -156,7 +162,7 @@ class PineOrderManager:
         for raw in payload.get("orders") or []:
             order = self._parse_order(raw)
             incoming[(order["category"], order["id"])] = order
-        live_at = now_ms + ARRIVAL_MS
+        live_at = now_ms + self.arrival_ms
         # Legs whose order vanished or changed are dropped (unless executing).
         for key, leg in list(self.legs.items()):
             current = incoming.get((leg.order["category"], leg.order["id"]))
@@ -387,10 +393,15 @@ class PineOrderManager:
             self._trigger(leg, now_ms, "trail")
 
     def _trigger(self, leg, now_ms, kind):
-        leg.state, leg.trigger_kind, leg.due_ms = "triggered", kind, now_ms + TRIGGER_DELAY_MS
+        leg.state, leg.trigger_kind, leg.due_ms = "triggered", kind, now_ms + self.trigger_delay_ms
         leg.source_ns = self.input_source_ns
         self.signals += 1
-        self.log(f"{leg.order['category']} {leg.order['id']} {kind} triggered; executes in {TRIGGER_DELAY_MS} ms")
+        if self.trigger_delay_ms <= 0:
+            # Live: the closing order leaves on the same price update that crossed the level.
+            self._execute(leg, now_ms)
+            self.log(f"{leg.order['category']} {leg.order['id']} {kind} triggered; executing now")
+            return
+        self.log(f"{leg.order['category']} {leg.order['id']} {kind} triggered; executes in {self.trigger_delay_ms} ms")
 
     # ----- execution --------------------------------------------------------
 
@@ -473,10 +484,11 @@ class PineOrderManager:
             raise ValueError(f"unknown execution request {request_id}")
         filled, opened = Decimal(str(filled)), Decimal(str(opened))
         if leg.key.startswith("residual:"):
+            # A late fill may already have closed part of the residual (Live).
             if leg.key == "residual:long":
-                self.residual_long -= filled
+                self.residual_long = max(ZERO, self.residual_long - filled)
             else:
-                self.residual_short -= filled
+                self.residual_short = max(ZERO, self.residual_short - filled)
             del self.legs[leg.key]
             return
         closed = filled - opened
@@ -532,7 +544,7 @@ class PineOrderManager:
         order = leg.order
         retry = (order["type"] in ("market", "stop") and leg.filled_real <= 0
                  and leg.attempt_started_ms is not None
-                 and now_ms - leg.attempt_started_ms < ENTRY_RETRY_WINDOW_MS and reason in (None, "no_liquidity"))
+                 and now_ms - leg.attempt_started_ms < self.entry_retry_window_ms and reason in (None, "no_liquidity"))
         resting = order.get("tif") != "ioc" and (order["type"] == "limit" or (order["type"] == "stop-limit" and leg.stop_triggered))
         if leg.filled_real <= 0 and resting and reason in (None, "no_liquidity"):
             leg.state, leg.request_id = "waiting", None  # touch without fill: keep resting
@@ -596,7 +608,39 @@ class PineOrderManager:
         reports, self.reports = self.reports, []
         return reports
 
-    # ----- residual flattening ------------------------------------------------
+    # ----- late fills (Live) and residual flattening ---------------------------
+
+    def late_fill(self, side, closing, opening):
+        """Real quantity filled after its order had ended (Live: Lighter's fill can follow its cancel).
+
+        Exposure it opened belongs to no trade and is flattened at market; exposure it closed leaves
+        the residual first, then the oldest trades of that side.
+        """
+        closing, opening = Decimal(str(closing)), Decimal(str(opening))
+        if opening > 0:
+            opened_side = "long" if side == "buy" else "short"
+            self._add_residual(opened_side, opening)
+            self.log(f"late fill: {opening} {opened_side} owned by no trade; queued for flattening")
+        if closing > 0:
+            held = "short" if side == "buy" else "long"
+            left = closing
+            take = min(left, self.residual_long if held == "long" else self.residual_short)
+            if held == "long":
+                self.residual_long -= take
+            else:
+                self.residual_short -= take
+            left -= take
+            for trade in self.trades.values():
+                if left <= 0:
+                    break
+                if trade.side == held and trade.real_qty > 0:
+                    take = min(left, trade.real_qty)
+                    trade.real_qty -= take
+                    left -= take
+            self.log(f"late fill: {closing - left} {held} closed outside its order"
+                     + (f"; {left} more than the trades held" if left > 0 else ""))
+        self._flatten_residual()
+
 
     def _flatten_residual(self):
         for side, qty in (("long", self.residual_long), ("short", self.residual_short)):

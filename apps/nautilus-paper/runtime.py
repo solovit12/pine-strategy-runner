@@ -53,8 +53,8 @@ from paper_core import (
 from diagnostics import DecisionDiagnostics
 
 
-PINNED_NAUTILUS = "2.0.0rc6.dev20260929"
-PINNED_FAST_NAUTILUS = "2.0.0rc6.dev20260929+hlfast5.1"
+PINNED_NAUTILUS = "2.0.0rc7"
+PINNED_FAST_NAUTILUS = "2.0.0rc7+hlfast5.1"
 RECOVERY_PROGRESS_MS = 30_000
 # A reconnected market without a fresh book is revived on its own: resubscribe its book
 # (the venue answers with a full snapshot) after these waits, the last one repeating.
@@ -214,6 +214,15 @@ LIVE_FLATTEN_WAIT_S = 30
 # any answer this long is treated as lost (reduce-only: a second one can never close too much).
 LIVE_FLATTEN_RETRY_S = 1.0
 LIVE_FLATTEN_SILENT_S = 5.0
+# Closes refused in a row (not sent by the Lighter module, e.g. "nonce refresh is in progress" for
+# 12 minutes after a reconnect, live run 04f7d933, 2026-10-18) are re-sent after 1, 2, 4, 8 s, then
+# every 10 s, instead of every second.
+LIVE_FLATTEN_RETRY_MAX_S = 10.0
+
+
+def flatten_retry_s(refusals):
+    """Pause before the next close after `refusals` refusals in a row."""
+    return min(LIVE_FLATTEN_RETRY_MAX_S, LIVE_FLATTEN_RETRY_S * 2 ** max(0, refusals - 1))
 # A market without verified data cannot run its engine-held exits: after this long with a position
 # open its position is closed at market (Lighter matches without our prices); the other markets go
 # on trading (owner decision 2026-10-15). Its open loss meanwhile comes from Lighter's account.
@@ -557,6 +566,7 @@ class PineTrackStrategy(TrackStrategy):
         self.flatten_ids = set()
         self.flatten_open = {}  # close order id -> {"qty", "filled", "sent"} while it has no final answer
         self.flatten_answered_at = 0.0
+        self.flatten_refusals = 0  # closes refused in a row
         self.flatten_attempts = 0
         self.flatten_gave_up = False
         self.gap_closing = False  # closing this market's position after a long data gap
@@ -837,6 +847,7 @@ class PineTrackStrategy(TrackStrategy):
                 self._sync_safety_stop()
             close = self.flatten_open.get(order_id)
             if close is not None:
+                self.flatten_refusals = 0
                 close["filled"] += Decimal(str(event.last_qty))
                 if close["filled"] >= close["qty"]:
                     self._close_answered(order_id)
@@ -1244,7 +1255,9 @@ class PineTrackStrategy(TrackStrategy):
                                           "the run stops and closes everything")
             return
         if order_id in self.flatten_ids:
-            self.controller.safe_event(self.spec.key, f"LIVE close {order_id} refused by Lighter: {reason}")
+            self.flatten_refusals += 1
+            self.controller.safe_event(self.spec.key, f"LIVE close {order_id} refused by Lighter: {reason}; next try in "
+                                       f"{flatten_retry_s(self.flatten_refusals):g} s")
             self._close_answered(order_id)
             return
         state = self.inflight
@@ -1310,7 +1323,7 @@ class PineTrackStrategy(TrackStrategy):
             return
         if any(at - close["sent"] < LIVE_FLATTEN_SILENT_S for close in self.flatten_open.values()):
             return  # a close is on its way
-        if at - self.flatten_answered_at < LIVE_FLATTEN_RETRY_S:
+        if at - self.flatten_answered_at < flatten_retry_s(self.flatten_refusals):
             return
         self.live_flatten()
 
@@ -1433,6 +1446,10 @@ class SdkTrackStrategy(PineTrackStrategy):
     def bar_boundary(self, boundary_ms):
         pass  # Python strategies decide on their own bars and quotes; entries are never gated
 
+    def on_public_trade(self, tick):
+        if self.runner.started and not self.controller.stopping:
+            self._guard("trade", lambda: self.runner.on_trade(tick.price, tick.size, tick.ts_event // 1_000_000))
+
     def apply_orders(self, item):
         raise ValueError("Pine order sets are not accepted by a Python strategy run")
 
@@ -1530,6 +1547,7 @@ class RuntimeController:
             emitter.defer_fsync = True
         self.live_reference = None  # {"period", "equity"}: the daily loss limit's starting equity
         self.live_clean_checked = False
+        self.live_start_balance = None  # Live: the real balance at the start
         self.live_account_index = None
         self.live_refusals = LiveRefusalPolicy()
         self.live_test_positions = {}  # offline tests: positions the stand-in exchange reports on top
@@ -1551,6 +1569,7 @@ class RuntimeController:
                       "order(s) not opened by this run. Close them on Lighter, then start again.")
             return
         loss = self.live.get("dailyLossLimitPercent")
+        self.live_start_balance = self.venue_cash(strategy)
         self.emitter.emit("event", venue=strategy.spec.display,
                           message=f"LIVE run on Lighter mainnet: account clean; "
                                   f"{'entries at the market minimum order plus 15%, ' if self.live.get('minimumOrderSize') else ''}"
@@ -1719,7 +1738,9 @@ class RuntimeController:
         for key, strategy in self.strategies.items():
             gap = self.recovery_gaps.get(key)
             if gap is None:
-                strategy.gap_closing = False
+                if strategy.gap_closing:
+                    strategy.gap_closing = False
+                    strategy.flatten_refusals = 0
                 continue
             if strategy.position == 0 or now_ms() - gap["started_ms"] < limit_ms:
                 continue
@@ -2273,6 +2294,7 @@ class RuntimeController:
             if len(cash_values) != 1:
                 raise ValueError("markets disagree on shared venue balance")
             accounts.append({"venue": venue_spec.display, "cashBalance": rows[0]["cashBalance"],
+                **({"startBalance": rows[0]["startBalance"]} if "startBalance" in rows[0] else {}),
                 **{name: sum(row[name] for row in rows) for name in counters},
                 "priceReady": all(row["priceReady"] for row in rows),
                 "positions": [position for row in rows for position in row["positions"]]})
@@ -2480,6 +2502,11 @@ async def monitor_stdin(controller, offline_sources):
                     strategy.cancel_order(ClientOrderId.from_str(strategy.safety["id"]))
                 elif command == "live_test_hold_fill" and controller.config["mode"] == "offline" and controller.live:
                     controller.strategies[track_key("lighter", str(item["market"]))].test_hold_fill = True
+                elif command == "trade" and controller.config["mode"] == "offline":
+                    key = track_key(item["venue"], item.get("market", "HYPE"))
+                    if key not in controller.specs or key not in offline_sources:
+                        raise ValueError("offline source not ready")
+                    offline_sources[key].publish_trade(item["price"], item["size"], market=item.get("market", "HYPE"))
                 elif command == "frame" and controller.config["mode"] == "offline":
                     venue = item["venue"]
                     key = track_key(venue, item.get("market", "HYPE"))

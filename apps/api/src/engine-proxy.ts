@@ -5,6 +5,7 @@ import {
   MAX_CONCURRENT_PAPER_EXPERIMENTS,
   type PaperExperimentCapabilities,
 } from '../../../packages/shared/src/paper-experiment-contracts.js';
+import { MAX_MARKETS_PER_RUN, MAX_MARKETS_PER_VENUE } from '../../../packages/shared/src/strategy-catalog-contracts.js';
 import { isCrossOriginPaperWrite } from './paper-routes.js';
 
 /**
@@ -45,7 +46,7 @@ function engineFetch(engine: EngineConnection, url: string, init: RequestInit = 
 
 export function unavailableCapabilities(reason = ENGINE_DOWN): PaperExperimentCapabilities {
   return {
-    available: false, reason, maxTracksPerVenue: 10, maxTracksPerExperiment: 20,
+    available: false, reason, maxTracksPerVenue: MAX_MARKETS_PER_VENUE, maxTracksPerExperiment: MAX_MARKETS_PER_RUN,
     maxConcurrentExperiments: MAX_CONCURRENT_PAPER_EXPERIMENTS,
   };
 }

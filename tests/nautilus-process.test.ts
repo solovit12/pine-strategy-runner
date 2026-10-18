@@ -48,6 +48,13 @@ describe('Nautilus log lines that stop a Paper run', () => {
     expect(isFatalNautilusLogLine(refused, true)).toBe(false);
     expect(isFatalNautilusLogLine(attributed, true)).toBe(false);
     expect(isFatalNautilusLogLine('[ERROR] PSR-PAPER-001.nautilus_lighter::data: Failed to subscribe to Lighter book deltas: Client("invalid market")', true)).toBe(true);
+    // Run c12c6815: a past closing fill without its opening fill, met while reconciling the account at start.
+    const history = '\u001b[1m2026-10-17T21:28:46.842813953Z\u001b[0m \u001b[1;31m[ERROR] PSR-PAPER-001.nautilus_execution::engine: '
+      + 'Cannot open NETTING position ADA-PERP.LIGHTER-EXTERNAL from reduce-only fill 35102785119 for ADA-PERP.LIGHTER; '
+      + 'matching_reduce_positions=[], open_positions=[]\u001b[0m';
+    expect(isFatalNautilusLogLine(history, true)).toBe(false);
+    expect(isFatalNautilusLogLine(history)).toBe(true); // Paper: unchanged
+    expect(isFatalNautilusLogLine('[ERROR] PSR-PAPER-001.nautilus_execution::engine: Cannot open NETTING position ADA-PERP.LIGHTER-PSR-001 from fill', true)).toBe(true);
     expect(isFatalNautilusLogLine('[ERROR] PSR-PAPER-001.nautilus_execution::engine: order rejected unexpectedly', true)).toBe(true);
     expect(isFatalNautilusLogLine('Traceback (most recent call last):', true)).toBe(true);
   });

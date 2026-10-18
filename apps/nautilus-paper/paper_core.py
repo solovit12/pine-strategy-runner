@@ -282,6 +282,9 @@ class TrackStrategy(Strategy):
             raise ValueError("order book unavailable")
         return book
 
+    def on_public_trade(self, tick):
+        """A public trade of the market; only strategies that ask for trades use it."""
+
     def on_quote(self, quote):
         self._guard("quote", lambda: self._market_callback(lambda: self._on_quote(quote)))
 
@@ -477,6 +480,9 @@ class TrackStrategy(Strategy):
             # Live: the real balance only; before the account arrives there is no virtual stand-in.
             "cashBalance": (decimal_string(balance.total.as_decimal()) if balance
                             else "0" if self.live else self.run_config["capitalPerVenue"]),
+            # Live: the real balance at the start, for the run's realized and total PnL.
+            **({"startBalance": decimal_string(self.controller.live_start_balance)}
+               if self.live and getattr(self.controller, "live_start_balance", None) is not None else {}),
             "brokerRevision": self.broker_revision,
             "publicFrames": self.controller.public_frames[self.spec.key],
             "pendingOrders": len(self.pending_order_ids),

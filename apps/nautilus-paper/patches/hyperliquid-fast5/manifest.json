@@ -1,16 +1,22 @@
 {
-  "revision": "f3c5702f5c82872b9981c7859d47b667d4bcb999",
-  "archiveUrl": "https://codeload.github.com/nautechsystems/nautilus_trader/tar.gz/f3c5702f5c82872b9981c7859d47b667d4bcb999",
-  "archiveBytes": 27186358,
-  "archiveSha256": "cb166f96c62fee3b3fb83590d779db8c9486afaeee64af2b35eef2c9925e04d4",
-  "candidateVersion": "2.0.0rc6.dev20260929+hlfast5.1",
+  "revision": "55c0e82053142bce3a5cba4de4221d3929c2d3bc",
+  "upstreamTag": "v2.0.0rc7",
+  "archiveUrl": "https://codeload.github.com/nautechsystems/nautilus_trader/tar.gz/55c0e82053142bce3a5cba4de4221d3929c2d3bc",
+  "archiveBytes": 28548586,
+  "archiveSha256": "0c8d1c5c340e20f8b7f797abb33b1cc44f875e0ad44777546133e0a7d8dfd6a9",
+  "candidateVersion": "2.0.0rc7+hlfast5.1",
   "patch": "hyperliquid-fast5.patch",
-  "patchSha256": "23052755bf999ade9a402fd93b3225e5c6ddb981b2b1fbdf6ef5215187ca420e",
+  "patchSha256": "ec8ce5a77547747935fb905f51dbc302f3e44836bb33890e9b65c6a19b20b22d",
   "files": [
     {
+      "path": "crates/adapters/hyperliquid/src/book/recovery.rs",
+      "upstreamSha256": "7379dc85ecfe295ccc26e67dbd3da05683bb26ff8f23e0a55d775e6a1dc767b2",
+      "patchedSha256": "33883881892eb63f6e8458654bd7762dc5e0af56fbdfa6437889c3247cb91f29"
+    },
+    {
       "path": "crates/adapters/hyperliquid/src/data.rs",
-      "upstreamSha256": "9e6ec65525f1327a7e0433459950b15da2cf015f9e46117327d2cdb01c783397",
-      "patchedSha256": "d04900a7a4dc1906cb7a7d6e84ad687ff919d0632a7784006b5b984c4ebd870f"
+      "upstreamSha256": "62d4f065f72f00235e7cceb607e15db23b00e92dd25276dee3001186dd3199b8",
+      "patchedSha256": "8f432264ca368ee25c1ee605f8c4047cccb63cf7bb23b4bd3d01c4c160b6253d"
     },
     {
       "path": "crates/adapters/hyperliquid/src/python/mod.rs",
@@ -24,18 +30,23 @@
     },
     {
       "path": "crates/adapters/hyperliquid/src/websocket/client.rs",
-      "upstreamSha256": "280bbfdc64201f3bb30bca6e0766e199c0fb98f6aafe33847d0e0cb0aff85f92",
-      "patchedSha256": "5e2f444f9d269b07c713c022b5aaecc3be9330d1aeedd15e491df021cf16e25a"
+      "upstreamSha256": "8efd7b28a2f67a7ba4966a1dbec5501e074b50f0175117074916c96fbdabd562",
+      "patchedSha256": "8652872d786731a6b424e613b3adb0b292d3097576679fb72bd0a8aa6a33f9c5"
+    },
+    {
+      "path": "crates/adapters/hyperliquid/src/websocket/handler.rs",
+      "upstreamSha256": "777efdb346273c55c30be80a7bb2619a08cb60f6584eecd40664601acd0cd722",
+      "patchedSha256": "0290aef03c96ede8c0653067ac6f44ec80bf8ddb53863c66b5068b5d9454842d"
     },
     {
       "path": "crates/adapters/hyperliquid/src/websocket/messages.rs",
-      "upstreamSha256": "e9f33e635dfd7db7d35cb7449e76f1c632e3f32d63dc31f3ce28312ee3651e1b",
-      "patchedSha256": "3869c4399ec34d68d3c3116529bf6a4a28ece359aa8104ef3878887f96569a85"
+      "upstreamSha256": "7743c2340e7062d5a0b0826be82c6230f50c43d6ac0cb3dcca23fa139513d10d",
+      "patchedSha256": "2a762d7bbb9e860054490bdf68151931c834e9fdd71d14291fef6abe12b61c91"
     },
     {
       "path": "crates/adapters/hyperliquid/src/websocket/parse.rs",
-      "upstreamSha256": "2c5338dacea1cf84b267ebb4276ede35e20743792d56646dea337978292b4a03",
-      "patchedSha256": "3d8628af9c4c2ec10f34f57f0aebec0ea702c3a3016b12e74e44dd2a4dd09d6a"
+      "upstreamSha256": "54cd88350555efed07d7fb97b524a9d3a114a37a14e87a5b7dc7fcc7abf4922d",
+      "patchedSha256": "13ebd456d40be95120a85d84a610b25c1057304f84bdab3350003eea276cbdcf"
     },
     {
       "path": "crates/adapters/hyperliquid/tests/integration/websocket.rs",
@@ -49,25 +60,26 @@
     },
     {
       "path": "python/nautilus_trader/adapters/hyperliquid/__init__.pyi",
-      "upstreamSha256": "333f5de2ba9fc670293d1a973398d189cca3ceb02261b8210bfe942393fd1332",
-      "patchedSha256": "2c06d2a38ef0f8666873ed7869de6322c0f80ae2682d52ca5e2aee9d080983c7"
+      "upstreamSha256": "158e94edd1b3c43430d07638ed89d55437dd0282cdae1ea35ecaeb0fcce63366",
+      "patchedSha256": "e35cba926f73f7856bcdf4488b41cf99a2975c56b5cb3f7e8a37e99f8884bfed"
     },
     {
       "path": "python/pyproject.toml",
-      "upstreamSha256": "ee943077fb957497b231c382eabcd3d625a93cf064864da3c43a1b42320aa0f4",
-      "patchedSha256": "ae486b06bc724d2a9fb77aae5aacef48ed7ad24d67dff3ae3854f3446500ad2f"
+      "upstreamSha256": "8357dd00d7b166d9b75bb377ce83ae52e8a8b18be36c2d7eb52acd681673e80d",
+      "patchedSha256": "5d19459c3082f89fef2d50b87746e000c0ca1618af4bd5fe7335c7065af82a38"
     }
   ],
   "toolchain": {
-    "rust": "1.98.1",
+    "rust": "1.99.0",
     "maturin": "1.15.0",
-    "python": "3.12",
+    "python": "3.13",
     "target": "aarch64-apple-darwin",
     "macosDeploymentTarget": "11.0",
     "sdk": "/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk",
     "buildJobs": 2,
     "nice": 10,
-    "gitCeilingDirectories": "$FAST_ROOT"
+    "gitCeilingDirectories": "$FAST_ROOT",
+    "pythonSource": "python-build-standalone 20261013 cpython-3.13.16 aarch64-apple-darwin install_only, SHA-256 ca0e6a70fb75a0984751bd75493e3de77680aef7fbd0fea9b903c299537b3423"
   },
   "features": [
     "extension-module",
@@ -81,14 +93,13 @@
     "hypersync",
     "tracing-bridge"
   ],
-  "originalWheelSha256": "dd2b6e335f468acacc9c3a4b318537e35187d5fa3564807cacee4a3d2ab35e40",
   "nativeCapability": "nautilus_trader.adapters.hyperliquid.HYPERLIQUID_FAST_BOOK_SUPPORTED",
   "buildProvenance": "Archive has no Git metadata; process-local GIT_CEILING_DIRECTORIES prevents embedding the parent repository revision. Manifest pins upstream revision and all patched file hashes.",
   "builtArtifact": {
-    "wheelBytes": 59724815,
-    "wheelSha256": "365415911b702671df3baff1b3ae1259af05a166f2be85b5f67fa3bca57625ef",
-    "librarySha256": "80f78394c8397cac209fbfdd76308733304c7c4638f28bea5493796a7fdd3478",
-    "wheelFile": "nautilus_trader-2.0.0rc6.dev20260929+hlfast5.1-cp312-cp312-macosx_11_0_arm64.whl",
-    "libraryBytes": 141252448
+    "wheelFile": "nautilus_trader-2.0.0rc7+hlfast5.1-cp313-cp313-macosx_11_0_arm64.whl",
+    "wheelBytes": 61756106,
+    "wheelSha256": "957041ea20c469f6b7646d59ac03644c92c621d55e1249a411da887488821af3",
+    "libraryBytes": 144566224,
+    "librarySha256": "d3c8927b5b6c2c735b437901e0d1e89440a2cce01494338615e29807d949a7c0"
   }
 }

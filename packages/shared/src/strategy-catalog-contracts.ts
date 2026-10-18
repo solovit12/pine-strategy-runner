@@ -98,6 +98,10 @@ export function hip3FeeMultiplier(deployerFeeScale: number, growthMode: boolean)
 }
 export const PINE_LIVE_TIMEFRAMES = ['1m', '5m', '15m', '30m', '1h', '4h', '1d'] as const;
 
+/** Markets one run may trade on one exchange (owner decision 2026-10-18: 15, was 10). */
+export const MAX_MARKETS_PER_VENUE = 15;
+export const MAX_MARKETS_PER_RUN = 2 * MAX_MARKETS_PER_VENUE;
+
 export const PineLiveTrackSchema = z.object({
   venue: z.enum(['Hyperliquid', 'Lighter']),
   market: z.string().regex(PAPER_MARKET_SYMBOL_PATTERN),
@@ -142,7 +146,7 @@ export type LiveTradingSettings = z.infer<typeof LiveTradingSettingsSchema>;
 const liveSettingsShape = {
   timeframe: z.enum(PINE_LIVE_TIMEFRAMES),
   // A saved draft may have no markets yet (Save from the Backtest editor); launch requires them.
-  tracks: z.array(PineLiveTrackSchema).max(20),
+  tracks: z.array(PineLiveTrackSchema).max(MAX_MARKETS_PER_RUN),
   capitalPerVenue: z.number().finite().min(100).max(1_000_000_000_000),
   orderSizePercent: z.number().finite().gt(0).max(100),
   hyperliquidMakerFeePercent: z.number().finite().min(0).max(100).nullable(),
@@ -162,8 +166,8 @@ function validateLiveTracks(value: { tracks: readonly { venue: string; market: s
     keys.add(key);
   }
   for (const venue of ['Hyperliquid', 'Lighter']) {
-    if (value.tracks.filter((track) => track.venue === venue).length > 10) {
-      context.addIssue({ code: 'custom', path: ['tracks'], message: `Choose no more than 10 ${venue} markets.` });
+    if (value.tracks.filter((track) => track.venue === venue).length > MAX_MARKETS_PER_VENUE) {
+      context.addIssue({ code: 'custom', path: ['tracks'], message: `Choose no more than ${MAX_MARKETS_PER_VENUE} ${venue} markets.` });
     }
   }
   for (const [index, track] of value.tracks.entries()) {

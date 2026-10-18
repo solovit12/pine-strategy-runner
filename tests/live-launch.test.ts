@@ -16,7 +16,7 @@ import type { Candle } from '../packages/shared/src/contracts.js';
 
 /** Live launch from the site (full edition): settings, engine switch, config handed to the engine. */
 const root = path.resolve(import.meta.dirname, '..');
-const python = path.join(root, '.local/nautilus-hl-fast5-20261001/.venv/bin/python');
+const python = path.join(root, '.local/nautilus-hl-fast5-rc7-20261018/.venv/bin/python');
 const MINUTE = 60_000;
 const source = `//@version=5
 strategy("Live launch", overlay=true)

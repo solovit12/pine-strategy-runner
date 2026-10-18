@@ -4,7 +4,9 @@ import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 
 import { z } from 'zod';
-import { PAPER_MARKET_SYMBOL_PATTERN } from '../../../../packages/shared/src/strategy-catalog-contracts.js';
+import {
+  MAX_MARKETS_PER_RUN, MAX_MARKETS_PER_VENUE, PAPER_MARKET_SYMBOL_PATTERN,
+} from '../../../../packages/shared/src/strategy-catalog-contracts.js';
 
 import type {
   PaperExperimentActivity,
@@ -60,6 +62,8 @@ const Position = z.object({
 const SnapshotAccount = z.object({
   venue: Venue,
   cashBalance: CashBalance,
+  /** Live: the real balance when the run started (its realized and total PnL are counted from it). */
+  startBalance: CashBalance.optional(),
   brokerRevision: Count,
   publicFrames: Count,
   pendingOrders: Count,
@@ -69,7 +73,7 @@ const SnapshotAccount = z.object({
   rejectedSignals: Count,
   priceReady: z.boolean(),
   stalePriceObservationsSkipped: Count,
-  positions: z.array(Position).max(10),
+  positions: z.array(Position).max(MAX_MARKETS_PER_VENUE),
 }).strict();
 /** A market waiting for fresh data after a gap: since when, whether its venue reconnected, retries. */
 const DataGap = z.object({
@@ -77,7 +81,7 @@ const DataGap = z.object({
   connected: z.boolean(),
   resubscribes: Count,
 }).strict();
-const SnapshotTrack = SnapshotAccount.omit({ cashBalance: true, brokerRevision: true, positions: true })
+const SnapshotTrack = SnapshotAccount.omit({ cashBalance: true, startBalance: true, brokerRevision: true, positions: true })
   .extend({ market: Market, dataGap: DataGap.optional() }).strict();
 const Message = z.discriminatedUnion('type', [
   z.object({ ...Base, type: z.literal('phase'),
@@ -85,7 +89,7 @@ const Message = z.discriminatedUnion('type', [
     message: Text }).strict(),
   z.object({ ...Base, type: z.literal('snapshot'),
     stage: z.enum(['waiting_for_data', 'running', 'recovering', 'stopping']),
-    accounts: z.array(SnapshotAccount).length(2), tracks: z.array(SnapshotTrack).min(1).max(20).optional() }).strict(),
+    accounts: z.array(SnapshotAccount).length(2), tracks: z.array(SnapshotTrack).min(1).max(MAX_MARKETS_PER_RUN).optional() }).strict(),
   z.object({ ...Base, type: z.literal('event'), market: Market.optional(), message: Text }).strict(),
   z.object({ ...Base, type: z.literal('failure'), market: Market.optional(), message: Text }).strict(),
   z.object({ ...Base, type: z.literal('fill'), venue: Venue,

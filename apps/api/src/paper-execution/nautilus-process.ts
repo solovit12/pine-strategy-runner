@@ -4,8 +4,8 @@ import path from 'node:path';
 import { promisify } from 'node:util';
 
 /** Shared Nautilus process plumbing used by every Paper engine (Pine, Python, built-in). */
-export const NAUTILUS_PAPER_VERSION = '2.0.0rc6.dev20260929';
-export const NAUTILUS_FAST_PAPER_VERSION = '2.0.0rc6.dev20260929+hlfast5.1';
+export const NAUTILUS_PAPER_VERSION = '2.0.0rc7';
+export const NAUTILUS_FAST_PAPER_VERSION = '2.0.0rc7+hlfast5.1';
 
 function isAlive(pid: number): boolean {
   try { process.kill(pid, 0); return true; }
@@ -24,6 +24,10 @@ function isAlive(pid: number): boolean {
  */
 export function isFatalNautilusLogLine(line: string, live = false): boolean {
   if (live && /\[ERROR\] \S*\.nautilus_lighter::(execution|websocket)/.test(line)) return false;
+  // Startup reconciliation of the account's past day: a closing fill whose opening fill Lighter no
+  // longer reports (live run c12c6815, 2026-10-17). A Live run starts only on a clean account and
+  // compares positions with Lighter every 10 s, so the skipped history changes nothing.
+  if (live && /\[ERROR\] \S*\.nautilus_execution::engine: Cannot open NETTING position \S+-EXTERNAL from reduce-only fill/.test(line)) return false;
   if (/nautilus_network::websocket::client: Received transport error, terminating/.test(line)) return false;
   if (/Failed to subscribe to Lighter book deltas: Client\("subscription cancelled before venue acknowledgement/.test(line)) return false;
   return /\[ERROR\]|InvalidStateTrigger|Traceback \(most recent call last\)/.test(line);

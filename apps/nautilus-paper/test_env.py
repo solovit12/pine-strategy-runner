@@ -8,4 +8,4 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 PYTHON = Path(os.environ.get("PSR_NAUTILUS_PYTHON")
-              or ROOT / ".local/nautilus-hl-fast5-20261001/.venv/bin/python")
+              or ROOT / ".local/nautilus-hl-fast5-rc7-20261018/.venv/bin/python")

@@ -10,7 +10,9 @@ import {
   type PaperExperimentRuntimeView,
   type StartPaperExperimentRequest,
 } from '../../../../packages/shared/src/paper-experiment-contracts.js';
-import type { StrategyDetail } from '../../../../packages/shared/src/strategy-catalog-contracts.js';
+import {
+  MAX_MARKETS_PER_RUN, MAX_MARKETS_PER_VENUE, type StrategyDetail,
+} from '../../../../packages/shared/src/strategy-catalog-contracts.js';
 import {
   PaperExperimentStoreError,
   PaperExperimentStoreV1,
@@ -159,8 +161,8 @@ export class PaperExperimentControllerV1 {
     return {
       available: reason === null,
       reason,
-      maxTracksPerVenue: this.#factory?.admissionLimits?.maxTracksPerVenue ?? 10,
-      maxTracksPerExperiment: this.#factory?.admissionLimits?.maxTracksPerExperiment ?? 20,
+      maxTracksPerVenue: this.#factory?.admissionLimits?.maxTracksPerVenue ?? MAX_MARKETS_PER_VENUE,
+      maxTracksPerExperiment: this.#factory?.admissionLimits?.maxTracksPerExperiment ?? MAX_MARKETS_PER_RUN,
       maxConcurrentExperiments: MAX_CONCURRENT_PAPER_EXPERIMENTS,
       activeExperiments: this.#store?.activeExperimentCount() ?? 0,
       liveTrading: this.#liveTrading(),

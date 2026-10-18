@@ -12,7 +12,7 @@ from decimal import Decimal
 
 from pine_orders import PineOrderManager
 
-from .api import Bar, Fill, OpenTrade, Quote, resolve_params
+from .api import Bar, Fill, OpenTrade, Quote, Trade, resolve_params
 
 MAX_BARS = 5_000
 ENTRY_TYPES = ("market", "limit", "stop", "stop-limit")
@@ -197,6 +197,7 @@ class StrategyRunner:
         self.venue, self.market = venue, market
         self.log = log or (lambda message: None)
         self.manager = manager or PineOrderManager(f"{venue}:{market}", mintick, self.log)
+        self.manager.python = True
         self.ctx = Context(self)
         self.bars = deque(maxlen=MAX_BARS)
         self.orders = {}  # "entry:L" / "exit:X" -> order dict (manager format)
@@ -270,6 +271,14 @@ class StrategyRunner:
         self.manager.on_quote(bid, ask, now_ms)
         self.drain(now_ms)
         self._call("on_quote", Quote(float(bid), float(ask), now_ms))
+        self.sync(now_ms)
+
+    def on_trade(self, price, size, now_ms):
+        """A public trade of the market; orders placed here go out with the next quote."""
+        if not self.started:
+            return
+        self.now_ms = now_ms
+        self._call("on_trade", Trade(float(price), float(size), now_ms))
         self.sync(now_ms)
 
     def evaluate(self, now_ms):

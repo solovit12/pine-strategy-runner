@@ -107,6 +107,8 @@ class PineOrderManager:
     def __init__(self, track, mintick, log=None, *, arrival_ms=ARRIVAL_MS, trigger_delay_ms=TRIGGER_DELAY_MS,
                  entry_retry_window_ms=ENTRY_RETRY_WINDOW_MS):
         self.track = track
+        # A Python strategy owns its orders itself: no Pine-side trade without a real fill.
+        self.python = False
         # Paper models network and venue latency with these delays; Live sets them to zero.
         self.arrival_ms = arrival_ms
         self.trigger_delay_ms = trigger_delay_ms
@@ -557,7 +559,8 @@ class PineOrderManager:
             price = leg.filled_quote / leg.filled_real
         else:
             price = self.ask if order["side"] == "long" else self.bid
-            self.log(f"entry {order['id']} executed in Pine only: {reason or 'no real fill'}")
+            self.log(f"entry {order['id']} not filled: {reason or 'no real fill'}" if self.python
+                     else f"entry {order['id']} executed in Pine only: {reason or 'no real fill'}")
         seq = self._report(leg, price, now_ms, None, None,
                            reason=None if leg.filled_real > 0 else (reason or "not_filled"))
         key = f"{order['id']}@{now_ms}"

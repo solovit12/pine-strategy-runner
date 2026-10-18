@@ -56,7 +56,7 @@ run should continue: a stopped computer or Docker interrupts it.
    every minute inside each candle; choose *4 points per bar* to reproduce
    TradingView's default (free account) results.
 3. **Paper tab.** Choose the timeframe, the starting balance per exchange, the
-   order size and up to 10 markets on each exchange, then press **Start Paper**.
+   order size and up to 15 markets on each exchange, then press **Start Paper**.
    The strategy is saved and starts trading with virtual money. A backtest first is
    optional.
 4. **Paper Runs.** Open a run to see open positions, balances, the rules it trades

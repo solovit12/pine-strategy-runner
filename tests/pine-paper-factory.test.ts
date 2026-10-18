@@ -12,7 +12,7 @@ import type { VenueMarket } from '../apps/api/src/paper-execution/venue-markets.
 import type { Candle } from '../packages/shared/src/contracts.js';
 
 const root = path.resolve(import.meta.dirname, '..');
-const python = path.join(root, '.local/nautilus-hl-fast5-20261001/.venv/bin/python');
+const python = path.join(root, '.local/nautilus-hl-fast5-rc7-20261018/.venv/bin/python');
 const MINUTE = 60_000;
 const source = `//@version=5
 strategy("Pine live e2e", overlay=true, default_qty_type=strategy.percent_of_equity, default_qty_value=10)

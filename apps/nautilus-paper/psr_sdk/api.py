@@ -95,6 +95,14 @@ class Quote:
 
 
 @dataclass(frozen=True)
+class Trade:
+    """One public trade of the market between any participants (strategies with uses_trades)."""
+    price: float
+    size: float  # base quantity
+    time_ms: int
+
+
+@dataclass(frozen=True)
 class Fill:
     """A real Paper execution of one of the strategy's orders."""
     order_id: str
@@ -138,6 +146,8 @@ class Strategy:
     #: At most this many markets of one exchange hold a position at once (None: no limit
     #: besides the account cash). An entry beyond it is rejected ("position_limit").
     max_positions_per_venue: int | None = None
+    #: True: the market's public trades also reach on_trade (e.g. to measure volume).
+    uses_trades: bool = False
     params: dict = {}
 
     def on_start(self, ctx):
@@ -148,6 +158,9 @@ class Strategy:
 
     def on_quote(self, ctx, quote):
         """Called on every fresh best bid/ask change (live only)."""
+
+    def on_trade(self, ctx, trade):
+        """Called for every public trade of the market (live only, when uses_trades is True)."""
 
     def on_fill(self, ctx, fill):
         """Called after each real execution of this strategy's orders."""

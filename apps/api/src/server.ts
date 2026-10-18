@@ -294,7 +294,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     .map((value) => value.trim()).filter(Boolean).map((value) => path.resolve(value));
   // An engine release runs from its own folder; the Python environment stays in the project.
   const nautilusPython = process.env.PSR_NAUTILUS_PYTHON
-    || path.join(projectRoot, '.local/nautilus-hl-fast5-20261001/.venv/bin/python');
+    || path.join(projectRoot, '.local/nautilus-hl-fast5-rc7-20261018/.venv/bin/python');
   const paperRuntimeFactory = role === 'site' ? null : options.paperRuntimeFactory !== undefined
     ? options.paperRuntimeFactory
     : process.env.NODE_ENV !== 'production'

@@ -6,16 +6,16 @@
 # the published wheel image (NAUTILUS_WHEEL=prebuilt) or is compiled here (source,
 # about 20-60 minutes and several GB of memory).
 
-ARG PYTHON_IMAGE=python:3.12-slim-bookworm
+ARG PYTHON_IMAGE=python:3.13-slim-bookworm
 ARG NODE_IMAGE=node:24.21.0-bookworm-slim
 ARG NAUTILUS_WHEEL=source
-ARG NAUTILUS_WHEEL_IMAGE=ghcr.io/solovit12/pine-strategy-runner-nautilus:2.0.0rc6.dev20260929-hlfast5.1
+ARG NAUTILUS_WHEEL_IMAGE=ghcr.io/solovit12/pine-strategy-runner-nautilus:2.0.0rc7-hlfast5.1
 
 # ---------------------------------------------------------------------------
 # 1. Nautilus Trader wheel, same recipe as apps/nautilus-paper/patches/hyperliquid-fast5
 FROM ${PYTHON_IMAGE} AS nautilus-source
 ARG TARGETARCH
-ARG RUST_VERSION=1.98.1
+ARG RUST_VERSION=1.99.0
 ARG MATURIN_VERSION=1.15.0
 ARG CARGO_BUILD_JOBS=4
 # The upstream profile links with fat LTO, which needs more than 25 GB of memory on

@@ -30,6 +30,7 @@ export interface VenueMarket {
 
 const LIGHTER_DETAILS_URL = 'https://mainnet.zklighter.elliot.ai/api/v1/orderBookDetails?filter=perp';
 const LIGHTER_CANDLES_URL = 'https://mainnet.zklighter.elliot.ai/api/v1/candles';
+const LIGHTER_TRADES_URL = 'https://mainnet.zklighter.elliot.ai/api/v1/recentTrades';
 const HYPERLIQUID_URL = 'https://api.hyperliquid.xyz/info';
 const REQUEST_TIMEOUT_MS = 15_000;
 const MAX_BODY_BYTES = 8 * 1024 * 1024;
@@ -202,6 +203,67 @@ export function pineMintick(market: VenueMarket, price: number): number {
   return exponent >= 0 ? 10 ** exponent : step(places);
 }
 
+/**
+ * How Lighter labels its candles at the moment: by the start of the period, or by its end (the
+ * whole history shifted by one candle). Observed both ways on the same day, 2026-10-17: the
+ * morning's answers were labeled by the end for every resolution, the evening's by the start, the
+ * set_timestamp_to_end parameter changing nothing. A reading is checked against Lighter's own
+ * recent trades: a one-minute candle's close is the last trade price of its minute.
+ */
+export type LighterCandleLabel = 'start' | 'end';
+const LIGHTER_LABEL_TTL_MS = 30_000;
+let lighterLabel: { value: LighterCandleLabel; at: number } | null = null;
+
+/** Tests reset the remembered label. */
+export function resetLighterCandleLabel(): void {
+  lighterLabel = null;
+}
+
+export async function lighterCandleLabel(marketId: string, options: VenueDataOptions = {}): Promise<LighterCandleLabel> {
+  const now = (options.now ?? Date.now)();
+  if (lighterLabel && now - lighterLabel.at < LIGHTER_LABEL_TTL_MS) return lighterLabel.value;
+  const minute = 60_000;
+  const current = Math.floor(now / minute) * minute; // the minute in progress
+  const tradesUrl = new URL(LIGHTER_TRADES_URL);
+  tradesUrl.searchParams.set('market_id', marketId);
+  tradesUrl.searchParams.set('limit', '100');
+  const candlesUrl = new URL(LIGHTER_CANDLES_URL);
+  candlesUrl.searchParams.set('market_id', marketId);
+  candlesUrl.searchParams.set('resolution', '1m');
+  candlesUrl.searchParams.set('start_timestamp', String(current - 10 * minute));
+  candlesUrl.searchParams.set('end_timestamp', String(current + minute));
+  candlesUrl.searchParams.set('count_back', '12');
+  const [tradesBody, candlesBody] = await Promise.all([
+    requestJson('lighter', tradesUrl.toString(), { method: 'GET', headers: { accept: 'application/json' } }, 'Lighter recent trades', options),
+    requestJson('lighter', candlesUrl.toString(), { method: 'GET', headers: { accept: 'application/json' } }, 'Lighter minute candles', options),
+  ]);
+  const trades = record(tradesBody, 'Lighter recent trades').trades;
+  const rows = record(candlesBody, 'Lighter minute candles').c;
+  // The last trade price of every finished minute.
+  const lastPrice = new Map<number, { at: number; price: number }>();
+  for (const item of Array.isArray(trades) ? trades : []) {
+    const row = record(item, 'Lighter trade');
+    const at = num(row.timestamp, 'Lighter trade timestamp');
+    const start = Math.floor(at / minute) * minute;
+    if (start >= current) continue;
+    const seen = lastPrice.get(start);
+    if (!seen || at >= seen.at) lastPrice.set(start, { at, price: num(row.price, 'Lighter trade price') });
+  }
+  let byStart = 0;
+  let byEnd = 0;
+  for (const item of Array.isArray(rows) ? rows : []) {
+    const row = record(item, 'Lighter minute candle');
+    const t = num(row.t, 'Lighter minute candle t');
+    const close = num(row.c, 'Lighter minute candle close');
+    if (lastPrice.get(t)?.price === close && t < current) byStart += 1;
+    if (lastPrice.get(t - minute)?.price === close) byEnd += 1;
+  }
+  // No evidence either way (no trades): keep the previous reading, the documented start otherwise.
+  const value: LighterCandleLabel = byEnd > byStart ? 'end' : byStart > byEnd ? 'start' : (lighterLabel?.value ?? 'start');
+  lighterLabel = { value, at: now };
+  return value;
+}
+
 const INTERVAL: Record<BacktestTimeframe, string> = {
   '1m': '1m', '5m': '5m', '15m': '15m', '30m': '30m', '1h': '1h', '4h': '4h', '1d': '1d', '1w': '1w',
 };
@@ -243,6 +305,8 @@ export async function fetchClosedCandles(market: VenueMarket, timeframe: Backtes
       }
     }
   } else {
+    // Labeled by the end: a period's candle carries the label of the next period's start.
+    const shift = await lighterCandleLabel(market.marketId, options) === 'end' ? frameMs : 0;
     let pageEnd = end;
     while (pageEnd > start) {
       const count = Math.min(LIGHTER_PAGE, Math.ceil((pageEnd - start) / frameMs));
@@ -250,8 +314,8 @@ export async function fetchClosedCandles(market: VenueMarket, timeframe: Backtes
       const url = new URL(LIGHTER_CANDLES_URL);
       url.searchParams.set('market_id', market.marketId);
       url.searchParams.set('resolution', INTERVAL[timeframe]);
-      url.searchParams.set('start_timestamp', String(pageStart));
-      url.searchParams.set('end_timestamp', String(pageEnd - 1));
+      url.searchParams.set('start_timestamp', String(pageStart + shift));
+      url.searchParams.set('end_timestamp', String(pageEnd - 1 + shift));
       url.searchParams.set('count_back', String(count));
       url.searchParams.set('set_timestamp_to_end', 'true');
       const body = record(await requestJson('lighter', url.toString(), { method: 'GET', headers: { accept: 'application/json' } },
@@ -259,7 +323,7 @@ export async function fetchClosedCandles(market: VenueMarket, timeframe: Backtes
       if (String(body.code) !== '200' || !Array.isArray(body.c)) throw new Error(`${label} candles are invalid.`);
       for (const item of body.c) {
         const row = record(item, label);
-        const openTime = num(row.t, `${label} t`);
+        const openTime = num(row.t, `${label} t`) - shift;
         if (openTime % frameMs !== 0 || openTime < pageStart || openTime >= pageEnd) continue;
         rows.set(openTime, candle(openTime, frameMs, row.o, row.h, row.l, row.c, row.v, label));
       }

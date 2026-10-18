@@ -6,11 +6,11 @@ snapshot parser. Missing `fast` stays absent on the wire; `false` stays false.
 Quote/BBO subscriptions, Lighter, execution, and the current installation are
 unchanged. The app decides whether to opt in. There is no deeper-book fallback.
 
-The patch is against official Nautilus commit
-`f3c5702f5c82872b9981c7859d47b667d4bcb999`, with candidate package version
-`2.0.0rc6.dev20260929+hlfast5.1`. `manifest.json` pins the source archive, patch,
-and each changed file. It retains the original wheel's features and the pinned
-source's existing execution fixes; the old rc5 HYPE/USDC proposal is not applied.
+The patch is against official Nautilus release `v2.0.0rc7` (commit
+`55c0e82053142bce3a5cba4de4221d3929c2d3bc`), with candidate package version
+`2.0.0rc7+hlfast5.1`. `manifest.json` pins the source archive, patch, and each
+changed file. It retains the original wheel's features. rc7 requires Python 3.13
+or 3.14; Python 3.12 is no longer supported upstream.
 
 The native module exports the boolean
 `nautilus_trader.adapters.hyperliquid.HYPERLIQUID_FAST_BOOK_SUPPORTED`.
@@ -20,7 +20,9 @@ requires this capability and the exact candidate version before using fast5.
 ## Subscription behavior
 
 - Only the adapter's `subscribe_book_deltas` command reads the optional `fast`
-  parameter. It rejects non-boolean values. The app uses this delta path.
+  parameter. It rejects non-boolean values. The app uses this delta path, which
+  in rc7 runs through the gated subscription and snapshot-recovery tasks
+  (`book/recovery.rs`); recovery replacements reuse the registered options.
 - The new Rust `subscribe_book_with_fast_options` method preserves the existing
   API through delegation from `subscribe_book_with_options`.
 - As in the upstream adapter, the first subscriber to a shared instrument book
@@ -36,13 +38,13 @@ Use a **new directory** inside the project's `.local` directory for each build.
 downloads the pinned public source, applies this patch, and checks hashes. It
 does not install tools or a wheel, start a service, or connect to an exchange.
 
-The build recipe uses Python 3.12, Rust 1.98.1, maturin 1.15.0, Apple arm64,
+The build recipe uses Python 3.13, Rust 1.99.0, maturin 1.15.0, Apple arm64,
 deployment target macOS 11.0, at most two compiler jobs, and process niceness 10.
 Use an isolated `RUSTUP_HOME`, `CARGO_HOME`, target directory, and Python venv.
 Do not point any of them at the current paper environment.
 
 Example preparation from the repository root (set `FAST_ROOT` to a new absolute
-path and `BUILD_PYTHON` to an existing Python 3.12 interpreter):
+path and `BUILD_PYTHON` to an existing Python 3.13 interpreter):
 
 ```sh
 "$BUILD_PYTHON" apps/nautilus-paper/patches/hyperliquid-fast5/prepare_source.py \
@@ -55,9 +57,11 @@ For the original candidate, the isolated rustup installer came from
 `https://static.rust-lang.org/rustup/dist/aarch64-apple-darwin/rustup-init` and was
 verified against the official checksum before execution. Its SHA-256 was
 `ec1b9233e7f72990ecd8e62063fa7f6c3dfc2bec8e97f88bff165f9100ac696a`.
-Use `--no-modify-path --profile minimal --default-toolchain 1.98.1` with the
+Use `--no-modify-path --profile minimal --default-toolchain 1.99.0` with the
 isolated `CARGO_HOME` and `RUSTUP_HOME`. No global installation or shell profile
-change is needed.
+change is needed. The rc7 candidate's Python 3.13 came from python-build-standalone
+release `20261013` (`cpython-3.13.16+20261013-aarch64-apple-darwin-install_only.tar.gz`),
+verified against that release's `SHA256SUMS` and unpacked inside `$FAST_ROOT`.
 
 Run the build from `$FAST_ROOT/source/python` with these **process-local**
 environment variables:

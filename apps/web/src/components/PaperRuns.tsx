@@ -151,22 +151,24 @@ export function PaperPositionsTable({ detail }: { detail: PaperExperimentDetail 
     const positions = observed?.positions ?? [];
     const unrealized = positions.reduce((sum, position) => sum + Number(position.unrealizedPnl ?? 0), 0);
     const equity = cash + unrealized;
-    const realized = cash - account.startingCash;
-    const total = equity - account.startingCash;
-    return { account, positions, cash, unrealized, equity, realized, total };
+    // Live: from the real balance at the start; older Live runs did not record it.
+    const start = live ? (observed?.startBalance === undefined ? null : Number(observed.startBalance)) : account.startingCash;
+    const realized = start === null ? null : cash - start;
+    const total = start === null ? null : equity - start;
+    return { account, positions, cash, unrealized, equity, realized, total, start };
   });
   return <section className="paper-activity-panel" aria-labelledby="paper-positions-title">
     <div className="paper-card-title"><div><span className="eyebrow">PORTFOLIO</span><h2 id="paper-positions-title">Open positions <InfoTooltip label="open positions" en="Virtual positions at the last account snapshot (refreshed every few seconds while positions are open). UPNL uses the mid price and excludes the exit fee. Realized PnL is the change of the exchange balance (closed trades and all fees); Total adds the open positions. Leverage is position value divided by the exchange equity: Paper positions use the account's own cash, so there is no liquidation price." ru="Виртуальные позиции по последнему снимку счёта (обновляется каждые несколько секунд, пока позиции открыты). UPNL считается по средней цене и без комиссии выхода. Реализованный PnL — изменение баланса биржи (закрытые сделки и все комиссии); Итого добавляет открытые позиции. Плечо — стоимость позиции, делённая на капитал биржи: в Paper позиции открываются на собственные средства счёта, поэтому цены ликвидации нет." /></h2><p>Updated {formatDate(runtime.observedAt)}</p></div></div>
     <div className="table-wrap"><table className="paper-run-table paper-positions-table">
       <thead><tr><th>Exchange</th><th>Symbol</th><th>UPNL</th><th>Avg entry</th><th>Mark</th><th>Leverage</th><th>Size</th><th>Opened</th></tr></thead>
-      {groups.map(({ account, positions, cash, unrealized, equity, realized, total }) => <tbody key={account.accountId}>
+      {groups.map(({ account, positions, cash, unrealized, equity, realized, total, start }) => <tbody key={account.accountId}>
         <tr className="paper-positions-venue"><td colSpan={8}>
           <strong>{account.venue}</strong>
           <span>Balance <b>{cash.toLocaleString(undefined, { maximumFractionDigits: 2 })} {account.currency}</b></span>
-          {!live && <span>Realized <b className={pnlClass(realized)}>{signedNumber(realized)}</b></span>}
+          {realized !== null && <span>Realized <b className={pnlClass(realized)}>{signedNumber(realized)}</b></span>}
           <span>Unrealized <b className={pnlClass(unrealized)}>{signedNumber(unrealized)}</b></span>
-          {live ? <span className="paper-live-badge">LIVE — real Lighter account</span>
-            : <span>Total PnL <b className={pnlClass(total)}>{signedNumber(total)} ({signedNumber(account.startingCash ? total / account.startingCash * 100 : 0)}%)</b></span>}
+          {total !== null && start !== null && <span>Total PnL <b className={pnlClass(total)}>{signedNumber(total)} ({signedNumber(start ? total / start * 100 : 0)}%)</b></span>}
+          {live && <span className="paper-live-badge">LIVE — real Lighter account</span>}
         </td></tr>
         {positions.length === 0
           ? <tr><td colSpan={8} className="paper-positions-none">No open positions</td></tr>

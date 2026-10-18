@@ -157,7 +157,7 @@ describe('Paper experiment control API', () => {
       const id = await saveStrategy(app);
       const capabilities = await app.inject({ method: 'GET', url: '/api/paper/capabilities' });
       expect(capabilities.statusCode).toBe(200);
-      expect(capabilities.json()).toMatchObject({ available: false, maxTracksPerVenue: 10, maxTracksPerExperiment: 20, maxConcurrentExperiments: 2 });
+      expect(capabilities.json()).toMatchObject({ available: false, maxTracksPerVenue: 15, maxTracksPerExperiment: 30, maxConcurrentExperiments: 2 });
       expect(capabilities.json().reason).toBe('Paper launch is not enabled on this server.');
       const rejected = await app.inject({ method: 'POST', url: '/api/paper-experiments', payload: launch(id) });
       expect(rejected.statusCode, rejected.body).toBe(422);

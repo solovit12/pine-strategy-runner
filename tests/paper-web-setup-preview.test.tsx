@@ -34,12 +34,14 @@ const savedStrategy = {
 } as unknown as StrategyDetail;
 
 describe('generic Pine Paper setup', () => {
-  it('validates any perpetual markets, at most ten per exchange, one exchange is enough', () => {
+  it('validates any perpetual markets, at most fifteen per exchange, one exchange is enough', () => {
     expect(validPaperSettings(settings, null)).toBeNull();
     expect(validPaperSettings({ ...settings, tracks: [{ venue: 'Lighter', market: 'SOL' }] }, null)).toBeNull();
     expect(validPaperSettings({ ...settings, tracks: [] }, null)).toBe('Choose at least one market.');
-    const eleven = Array.from({ length: 11 }, (_, index) => ({ venue: 'Lighter' as const, market: `M${index}` }));
-    expect(validPaperSettings({ ...settings, tracks: eleven }, null)).toBe('Choose at most 10 Lighter markets.');
+    const fifteen = Array.from({ length: 15 }, (_, index) => ({ venue: 'Lighter' as const, market: `M${index}` }));
+    expect(validPaperSettings({ ...settings, tracks: fifteen }, null)).toBeNull();
+    const sixteen = [...fifteen, { venue: 'Lighter' as const, market: 'M15' }];
+    expect(validPaperSettings({ ...settings, tracks: sixteen }, null)).toBe('Choose at most 15 Lighter markets.');
     expect(validPaperSettings({ ...settings, orderSizePercent: 0 }, null)).toMatch(/Order size/);
     expect(validPaperSettings({ ...settings, lighterTakerFeePercent: Number.NaN }, null)).toMatch(/four fees/);
     expect(validPaperSettings({ ...settings, capitalPerVenue: 50 }, null)).toMatch(/at least 100 USDC/);

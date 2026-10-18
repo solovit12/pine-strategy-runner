@@ -18,9 +18,13 @@ from nautilus_trader.live.clients import DataClient, DataClientFactory
 from nautilus_trader.model import (
     BookAction, BookOrder, BookType, CryptoPerpetual, Currency, InstrumentId,
     Money, OrderBookDelta, OrderBookDeltas, OrderSide, Price, Quantity,
-    QuoteTick, RecordFlag, StrategyId, Symbol, Venue,
+    QuoteTick, RecordFlag, StrategyId, Symbol, TradeTick, Venue,
 )
+from nautilus_trader.model import AggressorSide, TradeId
 from nautilus_trader.trading import Strategy
+
+# Markets one run may trade on one venue (owner decision 2026-10-18: 15, was 10).
+MAX_MARKETS_PER_VENUE = 15
 
 
 USDC = Currency.from_str("USDC")
@@ -88,8 +92,8 @@ def make_specs(tracks=None, require_both=True):
     if require_both and {spec.venue_key for spec in specs.values()} != set(VENUE_KEYS):
         raise ValueError("Paper tracks must select at least one market on each venue")
     for venue in VENUE_KEYS:
-        if sum(1 for spec in specs.values() if spec.venue_key == venue) > 10:
-            raise ValueError("Paper allows at most 10 markets per venue")
+        if sum(1 for spec in specs.values() if spec.venue_key == venue) > MAX_MARKETS_PER_VENUE:
+            raise ValueError(f"Paper allows at most {MAX_MARKETS_PER_VENUE} markets per venue")
     return specs
 
 
@@ -259,7 +263,14 @@ class PublicBridge(Strategy):
     def on_start(self):
         self.subscribe_quotes(self.spec.source_id)
         self.subscribe_book_deltas(self.spec.source_id, BookType.L2_MBP, managed=True, params=self._book_params())
+        if self.wants_trades():
+            self.subscribe_trades(self.spec.source_id)
         self.subscribe_socket_state()
+
+    def wants_trades(self):
+        """Only a strategy that asks for them (SDK `uses_trades`) gets the market's public trades."""
+        config = getattr(self.controller, "config", None) or {}
+        return bool(getattr(config.get("strategyClass"), "uses_trades", False))
 
     def resubscribe_book(self):
         """Ask the venue for this market's book again; it answers with a full snapshot."""
@@ -335,6 +346,13 @@ class PublicBridge(Strategy):
         except Exception as exc:
             self.controller.fail(f"{self.spec.display} book bridge: {type(exc).__name__}: {exc}", self.spec.key)
 
+    def on_trade(self, tick):
+        try:
+            if not self.controller.stopping:
+                self.controller.strategies[self.spec.key].on_public_trade(tick)
+        except Exception as exc:
+            self.controller.fail(f"{self.spec.display} trade bridge: {type(exc).__name__}: {exc}", self.spec.key)
+
     def on_socket_state(self, event):
         try:
             self.controller.socket_state(str(event.endpoint), str(event.state))
@@ -365,6 +383,17 @@ class OfflineSourceClient(DataClient):
 
     async def _subscribe_book_deltas(self, command):
         pass
+
+    async def _subscribe_trades(self, command):
+        pass
+
+    def publish_trade(self, price, size, market="HYPE"):
+        """A synthetic public trade of an offline market."""
+        spec = self.market_specs[market]
+        self.sequence += 1
+        now = time.time_ns()
+        self._handle_data(TradeTick(spec.source_id, Price.from_str(str(price)), Quantity.from_str(str(size)),
+                                    AggressorSide.BUY, TradeId(f"T-{self.sequence}"), now, now))
 
     def _instrument(self, market="HYPE"):
         spec = self.market_specs[market]

@@ -98,6 +98,8 @@ async def take_profit_closes_the_position():
             snapshot = await run.snapshot()
             lighter = next(a for a in snapshot["accounts"] if a["venue"] == "Lighter")
             assert lighter["positions"], lighter
+            # The real balance at the start, for the run page's realized and total PnL.
+            assert Decimal(lighter["startBalance"]) > 0, lighter
             await run.prices(("100.19", "100.25"))  # market take-profit at +1.2 % (100.188)
             await run.wait(lambda: run.fills("exit"), "take-profit")
             await run.wait(lambda: run.messages("removed from Lighter"), "exchange-side stop removed")
@@ -749,6 +751,8 @@ def settings_are_refused():
             # With the 15 % reserve a minimum long's exchange stop (strategy stop 1 %, 2 % beyond) keeps Max slippage.
             qty = Decimal("142")  # ceil(11.5 / 0.081428)
             assert sell_bps(ten, qty, Decimal("0.081428") * Decimal("0.99") * Decimal("0.98"), 300) == 300
+            # Refused closes in a row: 1, 2, 4, 8 s, then every 10 s (live run 04f7d933, 1300 tries in 12 minutes).
+            assert [runtime.flatten_retry_s(n) for n in range(0, 7)] == [1.0, 1.0, 2.0, 4.0, 8.0, 10.0, 10.0]
             slippage = runtime.RuntimeController.live_slippage
             assert slippage(SimpleNamespace(live={"maxSlippagePercent": "0.05"})) == {"market_order_slippage_bps": 5}
             assert slippage(SimpleNamespace(live={"maxSlippagePercent": "3"})) == {"market_order_slippage_bps": 300}

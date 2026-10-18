@@ -209,6 +209,8 @@ export interface PaperExperimentRuntimeView {
     readonly intents: number;
     readonly fills: number;
     readonly rejectedSignals: number;
+    /** Live: the real balance when the run started. */
+    readonly startBalance?: string;
     /** Whether every selected market at this venue has usable prices at observedAt. */
     readonly priceReady?: boolean;
     /** Price observations skipped because the one-second quote gate had expired. */

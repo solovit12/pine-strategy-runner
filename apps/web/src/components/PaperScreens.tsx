@@ -4,7 +4,7 @@ import { readPaperDraft, writePaperDraft } from '../lib/editor-draft';
 import { isXyzMarket } from '../lib/stock-hours';
 import { XyzHoursNotice } from './XyzHoursNotice';
 import {
-  LIVE_MAX_EXCHANGE_STOP_PERCENT, LIVE_MAX_LEVERAGE, PAPER_MARKET_SYMBOL_PATTERN, PINE_LIVE_TIMEFRAMES, pythonStrategyRef,
+  LIVE_MAX_EXCHANGE_STOP_PERCENT, LIVE_MAX_LEVERAGE, MAX_MARKETS_PER_VENUE, PAPER_MARKET_SYMBOL_PATTERN, PINE_LIVE_TIMEFRAMES, pythonStrategyRef,
   type PineLivePaperSettingsV1, type PythonLivePaperSettingsV1, type StrategyDetail, type StrategySummary,
 } from '../../../../packages/shared/src/strategy-catalog-contracts';
 import {
@@ -22,7 +22,7 @@ import { EDITION, liveTradingAvailable, pythonStrategiesAvailable, type Edition 
 type Venue = 'Hyperliquid' | 'Lighter';
 type Timeframe = typeof PINE_LIVE_TIMEFRAMES[number];
 const VENUES: readonly Venue[] = ['Hyperliquid', 'Lighter'];
-const MAX_PER_VENUE = 10;
+const MAX_PER_VENUE = MAX_MARKETS_PER_VENUE;
 /** Public base-tier perpetual fees (percent); editable before launch. */
 /** Markets of a new run in both editions (the owner's standard set); a saved strategy keeps its own. */
 export const DEFAULT_PAPER_MARKETS: Readonly<Record<'Hyperliquid' | 'Lighter', readonly string[]>> = {

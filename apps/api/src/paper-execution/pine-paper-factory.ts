@@ -1,6 +1,6 @@
 /**
  * Generic Pine Paper: any saved Pine strategy on any Lighter / Hyperliquid
- * USDC perpetuals (up to 10 per venue).
+ * USDC perpetuals (up to MAX_MARKETS_PER_VENUE per venue).
  *
  * - Pine evaluates each closed bar of the venue's own candles in an isolated
  *   worker (packages/pine-runtime/src/live-engine.ts). History before the
@@ -20,7 +20,7 @@ import path from 'node:path';
 import { BACKTEST_TIMEFRAME_MS, PINE_TIMEFRAME, type Candle } from '../../../../packages/shared/src/contracts.js';
 import type { PaperExperimentRuntimeView } from '../../../../packages/shared/src/paper-experiment-contracts.js';
 import {
-  PYTHON_STRATEGY_SOURCE_PREFIX,
+  MAX_MARKETS_PER_RUN, MAX_MARKETS_PER_VENUE, PYTHON_STRATEGY_SOURCE_PREFIX,
   type PineLivePaperSettingsV1,
   type PythonLivePaperSettingsV1,
 } from '../../../../packages/shared/src/strategy-catalog-contracts.js';
@@ -205,7 +205,9 @@ function assertInput(input: Proposed): LiveSettings {
   }
   if (settings.tracks.length < 1) throw new Error('Choose at least one market.');
   for (const venue of ['Lighter', 'Hyperliquid'] as const) {
-    if (settings.tracks.filter(track => track.venue === venue).length > 10) throw new Error(`Choose no more than 10 ${venue} markets.`);
+    if (settings.tracks.filter(track => track.venue === venue).length > MAX_MARKETS_PER_VENUE) {
+      throw new Error(`Choose no more than ${MAX_MARKETS_PER_VENUE} ${venue} markets.`);
+    }
   }
   for (const fee of [settings.lighterMakerFeePercent, settings.lighterTakerFeePercent,
     settings.hyperliquidMakerFeePercent, settings.hyperliquidTakerFeePercent]) {
@@ -234,7 +236,7 @@ function executionSettings(backtest: Record<string, unknown> | undefined, settin
 
 export function createPinePaperFactory(options: PinePaperFactoryOptions): PaperExperimentRuntimeFactory {
   const actors = new Map<string, Actor>();
-  const python = options.pythonPath ?? path.join(options.projectRoot, '.local/nautilus-hl-fast5-20261001/.venv/bin/python');
+  const python = options.pythonPath ?? path.join(options.projectRoot, '.local/nautilus-hl-fast5-rc7-20261018/.venv/bin/python');
   const hyperliquidFastBook = options.hyperliquidFastBook === true;
   const version = hyperliquidFastBook ? NAUTILUS_FAST_PAPER_VERSION : NAUTILUS_PAPER_VERSION;
   const script = path.join(options.projectRoot, 'apps/nautilus-paper/runtime.py');
@@ -652,7 +654,7 @@ export function createPinePaperFactory(options: PinePaperFactoryOptions): PaperE
   }
 
   return {
-    admissionLimits: { maxTracksPerVenue: 10, maxTracksPerExperiment: 20 },
+    admissionLimits: { maxTracksPerVenue: MAX_MARKETS_PER_VENUE, maxTracksPerExperiment: MAX_MARKETS_PER_RUN },
     async preflight(input) {
       assertLive(assertInput(input));
       const catalog = new StrategyCatalogV1(options.catalogDir);

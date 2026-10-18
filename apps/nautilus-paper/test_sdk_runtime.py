@@ -57,6 +57,21 @@ class DipBuyer(Strategy):
 """
 
 
+TRADES_PACK = """
+from psr_sdk import Strategy
+
+
+class TradeCounter(Strategy):
+    name = "Trade counter"
+    timeframe = "1m"
+    uses_trades = True
+
+    def on_trade(self, ctx, trade):
+        ctx.state["volume"] = ctx.state.get("volume", 0) + trade.size
+        ctx.log(f"strategy saw trade {trade.size} @ {trade.price}, volume {ctx.state['volume']}")
+"""
+
+
 def bars(count, end_ms):
     return [{"openTime": end_ms - (count - i) * MINUTE, "closeTime": end_ms - (count - i - 1) * MINUTE,
              "open": 100, "high": 100.1, "low": 99.9, "close": 100, "volume": 1} for i in range(count)]
@@ -153,6 +168,36 @@ async def ioc_scenario():
         print("sdk ioc PASS fills", len(run.fills()), flush=True)
 
 
+async def trades_scenario():
+    """A strategy with uses_trades gets the market's public trades from the bridge."""
+    with tempfile.TemporaryDirectory(prefix="psr-nautilus-sdk-trades-") as tmp:
+        folder = Path(tmp)
+        pack = folder / "trades_pack"
+        pack.mkdir()
+        (pack / "count.py").write_text(TRADES_PACK)
+        run = PineRun(folder, "sdk-trades", [("lighter", "SOL")])
+        run.config = {**pine_config(folder, "sdk-trades", [("lighter", "SOL")]), "nativeStrategy": "python_strategy_v1",
+                      "strategy": {"ref": "trades_pack/count:TradeCounter", "packPaths": [str(pack)], "params": {}}}
+        try:
+            await run.start()
+            now = time.time_ns() // 1_000_000
+            await run.send({"cmd": "bars", "venue": "lighter", "market": "SOL", "bars": bars(3, now - 1000)})
+            await run.wait(lambda: run.messages("warmed up on 3 bars"), "warm-up")
+            await run.prices(("99.90", "100.00"))
+            await run.send({"cmd": "trade", "venue": "lighter", "market": "SOL", "price": "100.00", "size": "1.500"})
+            await run.send({"cmd": "trade", "venue": "lighter", "market": "SOL", "price": "100.01", "size": "0.250"})
+            await run.wait(lambda: run.messages("strategy saw trade 0.25 @ 100.01, volume 1.75"), "public trades")
+            assert not run.failures(), run.failures()
+        except Exception:
+            print((folder / "stderr.log").read_text(errors="replace")[-8000:], file=sys.stderr)
+            print(json.dumps(run.events[-25:], indent=2), file=sys.stderr)
+            raise
+        finally:
+            await run.close()
+        print("sdk trades PASS", flush=True)
+
+
 if __name__ == "__main__":
     asyncio.run(scenario())
     asyncio.run(ioc_scenario())
+    asyncio.run(trades_scenario())

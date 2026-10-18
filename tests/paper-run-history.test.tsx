@@ -184,6 +184,26 @@ describe('Paper run activity', () => {
     expect(html).not.toContain('Diff');
   });
 
+  it('shows a Live run its realized and total PnL from the real start balance', () => {
+    const detail = (startBalance?: string) => ({
+      live: true, tracks: [{ venue: 'Lighter', market: 'XRP' }],
+      accounts: [{ venue: 'Lighter', accountId: 'acc-l', runId: 'r', startingCash: 10_000, currency: 'USDC' }],
+      runtime: { stage: 'running', engine: 'nautilus', observedAt: '2026-10-18T10:00:00.000Z', fundingTreatment: 'excluded', accounts: [
+        { venue: 'Lighter', accountId: 'acc-l', runId: 'r', cashBalance: '100.78', ...(startBalance ? { startBalance } : {}), positions: [
+          { market: 'XRP', side: 'short', remainingBaseQuantity: '11', avgEntryPrice: '1.302', markPrice: '1.2987', unrealizedPnl: '0.04' },
+        ] },
+      ] },
+    }) as unknown as PaperExperimentDetail;
+    const html = renderToStaticMarkup(createElement(PaperPositionsTable, { detail: detail('100.10') }));
+    expect(html).toContain('Realized <b class="paper-pnl-up">+0.68</b>');
+    expect(html).toContain('Total PnL <b class="paper-pnl-up">+0.72 (+0.72%)</b>');
+    expect(html).toContain('LIVE — real Lighter account');
+    // An older Live run without its start balance: no made-up totals from the virtual 10,000.
+    const older = renderToStaticMarkup(createElement(PaperPositionsTable, { detail: detail() }));
+    expect(older).not.toContain('Realized <b');
+    expect(older).not.toContain('Total PnL <b');
+  });
+
   it('states the markets, balances, fees, parameters and execution rules of the run', () => {
     const detail = {
       status: 'running',

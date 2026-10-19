@@ -152,6 +152,8 @@ interface Actor {
   stopPromise: Promise<StopProof> | null;
   stopping: boolean;
   failure: string | null;
+  /** Why an orderly stop was asked for when it is not the owner's Stop (a server shutdown). */
+  stopReason?: string;
   /** The engine's own final stop reason (a Live run ends it with the closes' outcome). */
   engineStopReason: string | null;
   seq: number;
@@ -298,7 +300,8 @@ export function createPinePaperFactory(options: PinePaperFactoryOptions): PaperE
       return await Promise.race([actor.childExit.then(() => true), new Promise<boolean>(resolve => { timer = setTimeout(() => resolve(false), ms); })]);
     } finally { if (timer) clearTimeout(timer); }
   }
-  function stop(actor: Actor): Promise<StopProof> {
+  function stop(actor: Actor, reason?: string): Promise<StopProof> {
+    if (reason) actor.stopReason ??= reason;
     if (actor.stopPromise) return actor.stopPromise;
     actor.stopping = true;
     actor.view = { ...actor.view, stage: 'stopping' };
@@ -306,8 +309,8 @@ export function createPinePaperFactory(options: PinePaperFactoryOptions): PaperE
     if (actor.timer) clearInterval(actor.timer);
     actor.stopPromise = (async () => {
       try {
-        record(actor, { type: 'phase', stage: 'stopping', message: actor.failure ?? (actor.settings.live
-          ? 'Stop requested; LIVE: closing every position on Lighter at market.' : 'Stop requested; closing both virtual accounts.') });
+        record(actor, { type: 'phase', stage: 'stopping', message: actor.failure ?? `${actor.stopReason ?? 'Stop requested;'} ${actor.settings.live
+          ? 'LIVE: closing every position on Lighter at market.' : 'Closing both virtual accounts.'}` });
       } catch { /* still stop */ }
       await Promise.race([Promise.allSettled([actor.task, actor.loop]), new Promise(resolve => setTimeout(resolve, 3_000))]);
       actor.pine?.close();
@@ -323,8 +326,8 @@ export function createPinePaperFactory(options: PinePaperFactoryOptions): PaperE
         }
       }
       let reason = actor.settings.live
-        ? liveStopReason(actor.failure, actor.engineStopReason)
-        : actor.failure ?? 'Stopped by user. Any open virtual positions remain in the audit snapshot; no automatic liquidation or resume.';
+        ? liveStopReason(actor.failure ?? actor.stopReason ?? null, actor.engineStopReason)
+        : actor.failure ?? actor.stopReason ?? 'Stopped by user. Any open virtual positions remain in the audit snapshot; no automatic liquidation or resume.';
       try { record(actor, { type: 'stopped', reason }); }
       catch (error) { reason += `; could not write final event: ${message(error)}`; }
       owner(actor);
@@ -707,7 +710,7 @@ export function createPinePaperFactory(options: PinePaperFactoryOptions): PaperE
         : `Loading ${PINE_LIVE_HISTORY_BARS} closed ${settings.timeframe} candles per market and starting Pine.` });
       notify(actor, { status: 'warming_up' });
       actor.task = prepare(actor);
-      return { stop: () => stop(actor), snapshot: () => actor.view };
+      return { stop: (reason?: string) => stop(actor, reason), snapshot: () => actor.view };
     },
     async abortStart(snapshot) {
       const actor = actors.get(snapshot.experimentId);

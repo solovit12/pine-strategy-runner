@@ -161,15 +161,15 @@ function checkTracks(value: {
   readonly settings: { readonly tracks: Binding['tracks'] };
 }): void {
   const selected = value.tracks.map(track => `${track.venue}:${track.market}`);
-  if (value.accounts.length !== 2 || value.tracks.length < 1 || value.tracks.length > 20
+  if (value.accounts.length !== 2 || value.tracks.length < 1 || value.tracks.length > MAX_MARKETS_PER_RUN
     || new Set(selected).size !== selected.length
     || value.tracks.some(track => !PAPER_MARKET_SYMBOL_PATTERN.test(track.market))
     || value.settings.tracks.length !== selected.length
     || new Set(value.settings.tracks.map(track => `${track.venue}:${track.market}`)).size !== selected.length
     || value.settings.tracks.some(track => !selected.includes(`${track.venue}:${track.market}`))
     || VENUES.some(venue => value.accounts.filter(account => account.venue === venue).length !== 1
-      || value.tracks.filter(track => track.venue === venue).length > 10)) {
-    throw new Error('Nautilus Paper requires one shared account per venue and at most 10 selected markets on each venue.');
+      || value.tracks.filter(track => track.venue === venue).length > MAX_MARKETS_PER_VENUE)) {
+    throw new Error(`Nautilus Paper requires one shared account per venue and at most ${MAX_MARKETS_PER_VENUE} selected markets on each venue.`);
   }
 }
 

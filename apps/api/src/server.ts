@@ -318,6 +318,19 @@ export async function buildApp(options: BuildAppOptions = {}) {
     runtimeFactory: paperRuntimeFactory, now, pythonStrategies, liveTrading,
   });
   app.addHook('onClose', async () => { await paperExperiments?.close(); strategyCatalog?.close(); });
+  // Runs the system stopped for a server shutdown start again once this engine is up.
+  if (paperExperiments && paperRuntimeFactory && process.env.PSR_RESUME_AFTER_RESTART !== '0') {
+    app.addHook('onReady', async () => {
+      const catalog = getStrategyCatalog();
+      if (!catalog) return;
+      void paperExperiments.resumeAfterRestart((id, version) => catalog.get(id, version)).then((results) => {
+        for (const result of results) {
+          if (result.resumedId) app.log.info(result, 'Paper run resumed after a server restart');
+          else app.log.warn(result, 'Paper run was not resumed after a server restart');
+        }
+      }, (error) => app.log.error({ err: error }, 'Resuming Paper runs after a server restart failed'));
+    });
+  }
   const paperStatus = async () => paperExperiments
     ? { reachable: Boolean(paperRuntimeFactory), capabilities: paperExperiments.capabilities() }
     : engineStatus(engine!);

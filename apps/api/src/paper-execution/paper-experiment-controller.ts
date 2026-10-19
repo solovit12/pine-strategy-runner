@@ -1,3 +1,7 @@
+import { randomUUID } from 'node:crypto';
+import { readFileSync, rmSync, writeFileSync } from 'node:fs';
+import path from 'node:path';
+
 import { pineCodeError } from '../../../../packages/pine-runtime/src/pine-errors.js';
 import {
   LIVE_ALREADY_ACTIVE_MESSAGE,
@@ -8,6 +12,7 @@ import {
   type PaperExperimentSummary,
   type PaperExperimentTrack,
   type PaperExperimentRuntimeView,
+  StartPaperExperimentSchema,
   type StartPaperExperimentRequest,
 } from '../../../../packages/shared/src/paper-experiment-contracts.js';
 import {
@@ -23,6 +28,17 @@ import { PINE_ONLY_MESSAGE } from '../../../../packages/shared/src/edition.js';
 
 const UNAVAILABLE_REASON = 'Paper launch is not enabled on this server.';
 const USER_STOP_REASON = 'Stopped before a completed Paper run.';
+/** Reason of a run that the system stopped (server shutdown or restart), not the owner. */
+export const SERVER_SHUTDOWN_REASON = 'Server shutdown: the system stopped the engine.';
+/** Runs stopped by a shutdown, started again by the next engine within this time. */
+export const RESUME_AFTER_RESTART_WINDOW_MS = 6 * 60 * 60 * 1000;
+const RESUME_FILE = 'resume-after-restart.json';
+
+export interface ResumeAfterRestartResult {
+  readonly stoppedId: string;
+  readonly resumedId?: string;
+  readonly error?: string;
+}
 
 export type PaperExperimentControllerErrorKind =
   | 'PAPER_UNAVAILABLE'
@@ -60,7 +76,8 @@ export type PaperExperimentStopProof =
 
 export interface PaperExperimentRuntimeHandle {
   /** Stop real market feeds and all paper sessions; never only change a UI flag. */
-  stop(): Promise<PaperExperimentStopProof>;
+  /** `reason` is set when the system, not the owner, stops the run (a server shutdown). */
+  stop(reason?: string): Promise<PaperExperimentStopProof>;
   /** Optional read-only view from the live owner; never inferred from control timestamps. */
   snapshot?(): PaperExperimentRuntimeView;
 }
@@ -105,6 +122,8 @@ function aggregateStatus(experiment: PaperExperimentDetail): PaperExperimentStat
 /** One local API-process owner. No browser lifetime, external orders or credentials. */
 export class PaperExperimentControllerV1 {
   readonly #store: PaperExperimentStoreV1 | null;
+  readonly #directory: string | null;
+  readonly #now: () => number;
   readonly #factory: PaperExperimentRuntimeFactory | null;
   readonly #catalogConfigured: boolean;
   readonly #pythonStrategies: boolean;
@@ -123,6 +142,8 @@ export class PaperExperimentControllerV1 {
     readonly liveTrading?: boolean | (() => boolean);
   }) {
     this.#store = options.directory ? new PaperExperimentStoreV1(options.directory, options.now) : null;
+    this.#directory = options.directory;
+    this.#now = options.now ?? Date.now;
     this.#factory = options.runtimeFactory ?? null;
     this.#catalogConfigured = options.catalogConfigured;
     this.#pythonStrategies = options.pythonStrategies ?? true;
@@ -350,6 +371,14 @@ export class PaperExperimentControllerV1 {
 
   async close(): Promise<void> {
     const ids = [...this.#managed.keys()];
+    // A shutdown is not the owner's Stop: say so, and let the next engine start these runs again.
+    const resume = ids.filter((id) => !this.#managed.get(id)!.stopRequested);
+    for (const id of resume) this.#managed.get(id)!.terminalReason = SERVER_SHUTDOWN_REASON;
+    if (resume.length && this.#directory) {
+      try {
+        writeFileSync(path.join(this.#directory, RESUME_FILE), JSON.stringify({ at: this.#now(), ids: resume }), { mode: 0o600 });
+      } catch { /* the runs still stop; they are just not resumed */ }
+    }
     await Promise.allSettled([...this.#managed.values()].map((managed) => managed.startPromise));
     const stops = await Promise.allSettled(ids.map((id) => this.stop(id)));
     const pendingStops = await Promise.allSettled([...this.#managed.values()].map((managed) => managed.stopPromise));
@@ -362,6 +391,46 @@ export class PaperExperimentControllerV1 {
         : new PaperExperimentControllerError('PAPER_STOP_FAILED', 'A Paper runtime is still stopping.');
     }
     this.#store?.close();
+  }
+
+  /**
+   * Start again the runs that the previous engine stopped for a server shutdown: same saved
+   * strategy version and settings, a new run. Only an orderly shutdown within the window
+   * qualifies; the file is removed first, so a failing start is never retried in a loop.
+   */
+  async resumeAfterRestart(saved: (strategyId: string, version: number) => StrategyDetail | null): Promise<ResumeAfterRestartResult[]> {
+    if (!this.#directory || !this.#store || !this.#factory) return [];
+    const file = path.join(this.#directory, RESUME_FILE);
+    let entry: { at?: unknown; ids?: unknown };
+    try {
+      entry = JSON.parse(readFileSync(file, 'utf8'));
+    } catch {
+      return [];
+    } finally {
+      rmSync(file, { force: true });
+    }
+    if (typeof entry.at !== 'number' || !Array.isArray(entry.ids)
+      || this.#now() - entry.at > RESUME_AFTER_RESTART_WINDOW_MS) return [];
+    const results: ResumeAfterRestartResult[] = [];
+    for (const stoppedId of entry.ids.filter((id): id is string => typeof id === 'string')) {
+      try {
+        const stopped = this.#store.get(stoppedId);
+        if (!stopped || stopped.status !== 'interrupted' || !stopped.reason?.startsWith(SERVER_SHUTDOWN_REASON)) {
+          results.push({ stoppedId, error: 'not stopped by a server shutdown' });
+          continue;
+        }
+        const strategy = saved(stopped.strategyId, stopped.strategyVersion);
+        const request = StartPaperExperimentSchema.parse({
+          strategyId: stopped.strategyId, version: stopped.strategyVersion, sourceSha256: stopped.sourceSha256,
+          settings: strategy?.version.paperSettings, idempotencyKey: randomUUID(),
+        });
+        const { experiment } = await this.start(request, strategy);
+        results.push({ stoppedId, resumedId: experiment.id });
+      } catch (error) {
+        results.push({ stoppedId, error: error instanceof Error ? error.message : String(error) });
+      }
+    }
+    return results;
   }
 
   #reportTrack(id: string, trackId: string, update: PaperTrackUpdate): void {
@@ -400,7 +469,7 @@ export class PaperExperimentControllerV1 {
     managed.stopPromise = (async () => {
       this.#store!.setStatus(id, 'stopping', managed.terminalReason);
       try {
-        const proof = await managed.handle!.stop();
+        const proof = await managed.handle!.stop(managed.terminalReason === SERVER_SHUTDOWN_REASON ? SERVER_SHUTDOWN_REASON : undefined);
         if (!proof || proof.controlSlotReleaseProven !== true
           || (proof.outcome === 'completed' && (proof.finalVenueDrainProven !== true || proof.reason !== null))
           || (proof.outcome === 'interrupted'
@@ -410,7 +479,8 @@ export class PaperExperimentControllerV1 {
         }
         if (proof.outcome === 'interrupted') {
           managed.terminalStatus = 'interrupted';
-          if (!managed.terminalReason || managed.terminalReason === USER_STOP_REASON) {
+          if (!managed.terminalReason || managed.terminalReason === USER_STOP_REASON
+            || (managed.terminalReason === SERVER_SHUTDOWN_REASON && proof.reason.startsWith(SERVER_SHUTDOWN_REASON))) {
             managed.terminalReason = proof.reason;
           } else if (!managed.terminalReason.includes(proof.reason)) {
             managed.terminalReason += `; ${proof.reason}`;

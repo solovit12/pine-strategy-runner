@@ -26,12 +26,13 @@ const settings = {
   lighterMakerEntryFeePercent: 0.1, lighterTakerExitFeePercent: 0.2,
 };
 
-function fixture(tracks: readonly { venue: 'Hyperliquid' | 'Lighter'; market: typeof NAUTILUS_PAPER_MARKETS[number] }[] = settings.tracks) {
+function fixture(tracks: readonly { venue: 'Hyperliquid' | 'Lighter'; market: typeof NAUTILUS_PAPER_MARKETS[number] }[] = settings.tracks,
+  runSettings: object = { ...settings, tracks }) {
   const root = mkdtempSync(path.join(tmpdir(), 'nautilus-ledger-'));
   roots.push(root);
   const store = new PaperExperimentStoreV1(path.join(root, 'control'), () => Date.UTC(2026, 8, 30, 11));
   const detail = store.reserve({ request: { strategyId: randomUUID(), version: 1,
-    sourceSha256, settings: { ...settings, tracks }, idempotencyKey: randomUUID() },
+    sourceSha256, settings: runSettings as typeof settings, idempotencyKey: randomUUID() },
   strategyName: 'Nautilus ledger', source }).experiment;
   const snapshot = store.snapshot(detail.id)!;
   store.close();
@@ -145,6 +146,24 @@ describe('Nautilus Paper durable ledger', () => {
       const committed = [...first.fills, ...second.fills].find(fill => fill.venue === row.venue && fill.market === row.market);
       expect(committed).toBeDefined();
     }
+  });
+
+  it('binds fifteen markets on each venue', () => {
+    const markets = ['HYPE', 'SOL', 'XRP', 'SUI', 'DOGE', 'LIT', 'ADA', 'ZEC', 'NEAR', 'PUMP',
+      'PRL', 'STRK', 'XMR', 'ZRO', 'SKR'];
+    const selected = markets.flatMap(market => [
+      { venue: 'Lighter' as const, market }, { venue: 'Hyperliquid' as const, market },
+    ]) as unknown as Parameters<typeof fixture>[0];
+    const { directory, detail, snapshot } = fixture(selected, {
+      accountModel: 'pine_live_v1', timeframe: '1h', tracks: selected, capitalPerVenue: 1_000, orderSizePercent: 10,
+      hyperliquidMakerFeePercent: null, hyperliquidTakerFeePercent: null, lighterMakerFeePercent: null, lighterTakerFeePercent: null,
+    });
+    const ledger = new NautilusPaperLedger(directory, snapshot);
+    const tracks = selected.map(track => ({ ...track, publicFrames: 1, pendingOrders: 0, signals: 0, intents: 0,
+      fills: 0, rejectedSignals: 0, priceReady: true, stalePriceObservationsSkipped: 0 }));
+    ledger.append({ ...envelope(detail.id, 1), type: 'snapshot', stage: 'running', accounts: accounts(), tracks });
+    ledger.close();
+    expect(readNautilusPaperSnapshot(detail, directory)!.tracks).toHaveLength(30);
   });
 
   it('rejects foreign, missing and repeated track facts before any SQLite append', () => {

@@ -1,12 +1,14 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { buildApp } from '../apps/api/src/server';
-import { PaperExperimentControllerV1, type PaperExperimentRuntimeFactory, type PaperExperimentStopProof } from '../apps/api/src/paper-execution/paper-experiment-controller';
+import {
+  PaperExperimentControllerV1, SERVER_SHUTDOWN_REASON, type PaperExperimentRuntimeFactory, type PaperExperimentStopProof,
+} from '../apps/api/src/paper-execution/paper-experiment-controller';
 import { PaperExperimentStoreError, PaperExperimentStoreV1 } from '../apps/api/src/paper-execution/paper-experiment-store';
 import { StartPaperExperimentSchema } from '../packages/shared/src/paper-experiment-contracts';
 import type { StrategyDetail } from '../packages/shared/src/strategy-catalog-contracts';
@@ -277,6 +279,75 @@ describe('Paper experiment control API', () => {
         expect(item).toMatchObject({ status: 'interrupted', strategyVersion: 1, sourceSha256: hash });
       }
     } finally { await reopened.close(); }
+  });
+
+  it('stops runs for a server shutdown with that reason and starts them again on the next engine', async () => {
+    const root = await tempRoot();
+    const dirs = { strategyCatalogDir: path.join(root, 'catalog'), paperExperimentsDir: path.join(root, 'paper') };
+    const stopReasons: (string | undefined)[] = [];
+    const started: string[] = [];
+    const factory: PaperExperimentRuntimeFactory = {
+      preflight: async () => undefined,
+      abortStart: async () => interruptedStopProof,
+      start: async (snapshot) => {
+        started.push(snapshot.experimentId);
+        return { stop: async (reason?: string) => {
+          stopReasons.push(reason);
+          return { ...interruptedStopProof, reason: reason ? `${reason} Every position is closed.` : interruptedStopProof.reason };
+        } };
+      },
+    };
+    let strategyId = '';
+    let shutDown = '';
+    let ownerStopped = '';
+    const app = await buildApp({ ...dirs, paperRuntimeFactory: factory });
+    try {
+      strategyId = await saveStrategy(app);
+      shutDown = (await app.inject({ method: 'POST', url: '/api/paper-experiments', payload: launch(strategyId) })).json().experiment.id;
+      ownerStopped = (await app.inject({ method: 'POST', url: '/api/paper-experiments', payload: launch(strategyId) })).json().experiment.id;
+      expect((await app.inject({ method: 'POST', url: `/api/paper-experiments/${ownerStopped}/stop` })).statusCode).toBe(200);
+    } finally { await app.close(); }
+    expect(stopReasons).toEqual([undefined, SERVER_SHUTDOWN_REASON]);
+    expect(JSON.parse(await readFile(path.join(dirs.paperExperimentsDir, 'resume-after-restart.json'), 'utf8')).ids).toEqual([shutDown]);
+
+    const next = await buildApp({ ...dirs, paperRuntimeFactory: factory });
+    try {
+      await next.ready();
+      await vi.waitFor(() => expect(started).toHaveLength(3));
+      const runs = (await next.inject({ method: 'GET', url: '/api/paper-experiments' })).json().experiments as
+        { id: string; status: string; reason: string | null; strategyId: string; strategyVersion: number }[];
+      expect(runs.find(run => run.id === shutDown)).toMatchObject({ status: 'interrupted',
+        reason: `${SERVER_SHUTDOWN_REASON} Every position is closed.` });
+      expect(runs.find(run => run.id === ownerStopped)?.reason).not.toContain(SERVER_SHUTDOWN_REASON);
+      expect(runs.find(run => run.id === started[2])).toMatchObject({ status: 'waiting_for_data', strategyId, strategyVersion: 1 });
+      await expect(readFile(path.join(dirs.paperExperimentsDir, 'resume-after-restart.json'))).rejects.toThrow();
+    } finally { await next.close(); }
+  });
+
+  it('does not resume a shutdown run after the resume window', async () => {
+    const root = await tempRoot();
+    const dirs = { strategyCatalogDir: path.join(root, 'catalog'), paperExperimentsDir: path.join(root, 'paper') };
+    const started: string[] = [];
+    const factory: PaperExperimentRuntimeFactory = {
+      preflight: async () => undefined,
+      abortStart: async () => interruptedStopProof,
+      start: async (snapshot) => { started.push(snapshot.experimentId); return { stop: async (reason?: string) => ({ ...interruptedStopProof, reason: reason ?? 'x' }) }; },
+    };
+    const app = await buildApp({ ...dirs, paperRuntimeFactory: factory });
+    try {
+      const strategyId = await saveStrategy(app);
+      await app.inject({ method: 'POST', url: '/api/paper-experiments', payload: launch(strategyId) });
+    } finally { await app.close(); }
+    const file = path.join(dirs.paperExperimentsDir, 'resume-after-restart.json');
+    const entry = JSON.parse(await readFile(file, 'utf8'));
+    await writeFile(file, JSON.stringify({ ...entry, at: entry.at - 7 * 60 * 60 * 1000 }));
+    const next = await buildApp({ ...dirs, paperRuntimeFactory: factory });
+    try {
+      await next.ready();
+      await new Promise(resolve => setTimeout(resolve, 100));
+      expect(started).toHaveLength(1);
+      await expect(readFile(file)).rejects.toThrow();
+    } finally { await next.close(); }
   });
 
   it('keeps a stopping run in its slot until the owner actually stops', async () => {

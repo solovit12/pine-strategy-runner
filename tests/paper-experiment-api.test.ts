@@ -10,7 +10,7 @@ import {
   PaperExperimentControllerV1, SERVER_SHUTDOWN_REASON, type PaperExperimentRuntimeFactory, type PaperExperimentStopProof,
 } from '../apps/api/src/paper-execution/paper-experiment-controller';
 import { PaperExperimentStoreError, PaperExperimentStoreV1 } from '../apps/api/src/paper-execution/paper-experiment-store';
-import { StartPaperExperimentSchema } from '../packages/shared/src/paper-experiment-contracts';
+import { MAX_CONCURRENT_PAPER_EXPERIMENTS as MAX_RUNS, StartPaperExperimentSchema } from '../packages/shared/src/paper-experiment-contracts';
 import type { StrategyDetail } from '../packages/shared/src/strategy-catalog-contracts';
 
 const source = `//@version=6
@@ -78,6 +78,17 @@ async function saveStrategy(app: Awaited<ReturnType<typeof buildApp>>) {
   } });
   expect(result.statusCode, result.body).toBe(201);
   return result.json().strategy.id as string;
+}
+
+/** Starts more runs until `active` of the run limit are taken (each must start). */
+async function fillSlots(app: Awaited<ReturnType<typeof buildApp>>, strategyId: string, from: number, status = 201) {
+  const started = [];
+  for (let active = from; active < MAX_RUNS; active += 1) {
+    const response = await app.inject({ method: 'POST', url: '/api/paper-experiments', payload: launch(strategyId) });
+    expect(response.statusCode, response.body).toBe(status);
+    started.push(response);
+  }
+  return started;
 }
 
 function launch(strategyId: string, idempotencyKey = randomUUID()) {
@@ -159,7 +170,7 @@ describe('Paper experiment control API', () => {
       const id = await saveStrategy(app);
       const capabilities = await app.inject({ method: 'GET', url: '/api/paper/capabilities' });
       expect(capabilities.statusCode).toBe(200);
-      expect(capabilities.json()).toMatchObject({ available: false, maxTracksPerVenue: 15, maxTracksPerExperiment: 30, maxConcurrentExperiments: 2 });
+      expect(capabilities.json()).toMatchObject({ available: false, maxTracksPerVenue: 15, maxTracksPerExperiment: 30, maxConcurrentExperiments: MAX_RUNS });
       expect(capabilities.json().reason).toBe('Paper launch is not enabled on this server.');
       const rejected = await app.inject({ method: 'POST', url: '/api/paper-experiments', payload: launch(id) });
       expect(rejected.statusCode, rejected.body).toBe(422);
@@ -243,9 +254,10 @@ describe('Paper experiment control API', () => {
       const second = await app.inject({ method: 'POST', url: '/api/paper-experiments', payload: launch(strategyId) });
       expect(second.statusCode, second.body).toBe(201);
       expect(second.json().experiment.id).not.toBe(experiment.id);
+      await fillSlots(app, strategyId, 2);
       const full = await app.inject({ method: 'GET', url: '/api/paper/capabilities' });
-      expect(full.json()).toMatchObject({ available: false, maxConcurrentExperiments: 2 });
-      expect(full.json().reason).toMatch(/2 Paper experiments are already active/);
+      expect(full.json()).toMatchObject({ available: false, maxConcurrentExperiments: MAX_RUNS });
+      expect(full.json().reason).toMatch(new RegExp(`${MAX_RUNS} Paper experiments are already active`));
       const third = await app.inject({ method: 'POST', url: '/api/paper-experiments', payload: launch(strategyId) });
       expect(third.statusCode).toBe(409);
       expect(third.json().kind).toBe('PAPER_EXPERIMENT_LIMIT');
@@ -274,7 +286,7 @@ describe('Paper experiment control API', () => {
     const reopened = await buildApp({ strategyCatalogDir: path.join(root, 'catalog'), paperExperimentsDir: path.join(root, 'paper') });
     try {
       const list = await reopened.inject({ method: 'GET', url: '/api/paper-experiments' });
-      expect(list.json().experiments).toHaveLength(2);
+      expect(list.json().experiments).toHaveLength(MAX_RUNS);
       for (const item of list.json().experiments) {
         expect(item).toMatchObject({ status: 'interrupted', strategyVersion: 1, sourceSha256: hash });
       }
@@ -369,6 +381,7 @@ describe('Paper experiment control API', () => {
       expect(first.json().experiment.tracks.every((track: { status: string }) => track.status === 'waiting_for_data')).toBe(true);
       const parallel = await app.inject({ method: 'POST', url: '/api/paper-experiments', payload: launch(id) });
       expect(parallel.statusCode, parallel.body).toBe(201);
+      await fillSlots(app, id, 2);
       const pendingStop = app.inject({ method: 'POST', url: `/api/paper-experiments/${experimentId}/stop` });
       await vi.waitFor(() => expect(stop).toHaveBeenCalledTimes(1));
       const whileStopping = await app.inject({ method: 'GET', url: `/api/paper-experiments/${experimentId}` });
@@ -411,6 +424,7 @@ describe('Paper experiment control API', () => {
       expect(rejected.json().experiment.reason).toMatch(/owner is still draining/);
       const second = await app.inject({ method: 'POST', url: '/api/paper-experiments', payload: launch(id) });
       expect(second.statusCode, second.body).toBe(201);
+      await fillSlots(app, id, 2);
       const third = await app.inject({ method: 'POST', url: '/api/paper-experiments', payload: launch(id) });
       expect(third.statusCode).toBe(409);
       const retried = await app.inject({ method: 'POST', url: `/api/paper-experiments/${experimentId}/stop` });
@@ -439,6 +453,7 @@ describe('Paper experiment control API', () => {
       expect(unproven.json().experiment.reason).toMatch(/did not prove a releasable/);
       const parallel = await app.inject({ method: 'POST', url: '/api/paper-experiments', payload: launch(id) });
       expect(parallel.statusCode, parallel.body).toBe(201);
+      await fillSlots(app, id, 2);
       const busy = await app.inject({ method: 'GET', url: '/api/paper/capabilities' });
       expect(busy.json().available).toBe(false);
       proof = interruptedStopProof;
@@ -616,10 +631,11 @@ describe('Paper experiment control API', () => {
       expect(failed.json().experiment.reason).toMatch(/first venue owner is still live/);
       const secondFailed = await app.inject({ method: 'POST', url: '/api/paper-experiments', payload: launch(id) });
       expect(secondFailed.statusCode).toBe(503);
+      const moreFailed = await fillSlots(app, id, 2, 503);
       const third = await app.inject({ method: 'POST', url: '/api/paper-experiments', payload: launch(id) });
       expect(third.statusCode).toBe(409);
       cleanupCanFinish = true;
-      for (const held of [failed, secondFailed]) {
+      for (const held of [failed, secondFailed, ...moreFailed]) {
         const stopped = await app.inject({ method: 'POST', url: `/api/paper-experiments/${held.json().experiment.id}/stop` });
         expect(stopped.statusCode).toBe(200);
         expect(stopped.json().experiment.status).toBe('interrupted');
@@ -675,7 +691,7 @@ describe('Paper experiment control API', () => {
     } finally { await app.close(); }
   });
 
-  it('admits only up to the concurrent limit when three launches race', async () => {
+  it('admits only up to the concurrent limit when one launch more than it races', async () => {
     const root = await tempRoot();
     const start = vi.fn(async () => ({ stop: async () => interruptedStopProof }));
     const factory: PaperExperimentRuntimeFactory = {
@@ -686,14 +702,11 @@ describe('Paper experiment control API', () => {
     const app = await buildApp({ strategyCatalogDir: path.join(root, 'catalog'), paperExperimentsDir: path.join(root, 'paper'), paperRuntimeFactory: factory });
     try {
       const id = await saveStrategy(app);
-      const responses = await Promise.all([
-        app.inject({ method: 'POST', url: '/api/paper-experiments', payload: launch(id) }),
-        app.inject({ method: 'POST', url: '/api/paper-experiments', payload: launch(id) }),
-        app.inject({ method: 'POST', url: '/api/paper-experiments', payload: launch(id) }),
-      ]);
-      expect(responses.map((response) => response.statusCode).sort()).toEqual([201, 201, 409]);
-      expect(start).toHaveBeenCalledTimes(2);
-      expect((await app.inject({ method: 'GET', url: '/api/paper-experiments' })).json().experiments).toHaveLength(2);
+      const responses = await Promise.all(Array.from({ length: MAX_RUNS + 1 },
+        () => app.inject({ method: 'POST', url: '/api/paper-experiments', payload: launch(id) })));
+      expect(responses.map((response) => response.statusCode).sort()).toEqual([...Array(MAX_RUNS).fill(201), 409]);
+      expect(start).toHaveBeenCalledTimes(MAX_RUNS);
+      expect((await app.inject({ method: 'GET', url: '/api/paper-experiments' })).json().experiments).toHaveLength(MAX_RUNS);
     } finally { await app.close(); }
   });
 

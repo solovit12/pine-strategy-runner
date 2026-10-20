@@ -5,6 +5,7 @@ import { PINETS_VERSION, type BacktestRequest, type BacktestResponse, type Backt
 import { PYTHON_STRATEGY_SOURCE_PREFIX, pythonStrategyRef, type PaperStrategySettings, type StrategyDetail, type StrategySummary } from '../../../packages/shared/src/strategy-catalog-contracts';
 import { BinanceMarketSelector } from './components/BinanceMarketSelector';
 import { Metrics } from './components/Metrics';
+import { LiveAccountsPage } from './components/LiveSettings';
 import { PaperRunsPreview, PaperSetupPreview, type PaperVersionRequest } from './components/PaperScreens';
 import { PriceChart } from './components/PriceChart';
 import { StrategyLibraryBrowser } from './components/StrategyLibraryBrowser';
@@ -19,12 +20,12 @@ import { readEditorDraft, writeEditorDraft, type EditorDraft } from './lib/edito
 import { backtestResultAfter } from './lib/run-result-state';
 import { backtestSettingsSupportedByEditor } from './lib/strategy-editor-compat';
 import { registerBacktestWebTools } from './lib/webmcp';
-import { EDITION } from '../../../packages/shared/src/edition';
+import { EDITION, liveTradingAvailable } from '../../../packages/shared/src/edition';
 import { findSavedPythonStrategy, pythonStrategySource } from './lib/python-strategy-library';
 import { changedDeclarationProperties, strategyDeclarationProperties, type StrategyDeclarationProperties } from './strategy-declaration';
 
 type RunState = 'loading-preset' | 'ready' | 'running' | 'success' | 'error' | 'stopped';
-type AppPage = 'backtest' | 'paper-setup' | 'paper-runs';
+type AppPage = 'backtest' | 'paper-setup' | 'paper-runs' | 'accounts';
 
 /** Header status: busy Paper slots still mean Paper works; a site without its engine says so. */
 /** Tells the owner's private and public sites apart, in the header and the browser tab. */
@@ -65,6 +66,7 @@ function pageFromPath(): AppPage {
   if (typeof window === 'undefined') return 'backtest';
   if (window.location.pathname === '/paper/setup') return 'paper-setup';
   if (window.location.pathname.startsWith('/paper')) return 'paper-runs';
+  if (window.location.pathname === '/accounts') return 'accounts';
   return 'backtest';
 }
 type OrderSizeType = 'fixed' | 'cash' | 'percent_of_equity';
@@ -324,12 +326,19 @@ export function App() {
   const navigate = (next: AppPage) => {
     setBrowseStrategies(false);
     setSaveDialogOpen(false);
-    const path = next === 'paper-setup' ? '/paper/setup' : next === 'paper-runs' ? '/paper' : '/';
+    const path = next === 'paper-setup' ? '/paper/setup' : next === 'paper-runs' ? '/paper' : next === 'accounts' ? '/accounts' : '/';
     window.history.pushState(null, '', path);
     window.dispatchEvent(new Event('paper-route-changed'));
     // Switching between the Strategy tabs keeps the editor in view.
-    if (next === 'paper-runs' || page === 'paper-runs') window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (next === 'paper-runs' || page === 'paper-runs' || next === 'accounts' || page === 'accounts') window.scrollTo({ top: 0, behavior: 'smooth' });
     setPage(next);
+  };
+
+  /** Opens one run's page (Paper Runs), e.g. from the account that run trades. */
+  const openRun = (runId: string) => {
+    navigate('paper-runs');
+    window.history.replaceState(null, '', `/paper/${encodeURIComponent(runId)}`);
+    window.dispatchEvent(new Event('paper-route-changed'));
   };
 
   /**
@@ -702,8 +711,9 @@ export function App() {
           <span className={`edition-badge edition-${EDITION}`}>{EDITION_LABEL}</span>
         </div>
         <nav className="top-nav" aria-label="Main navigation">
-          <button type="button" className={page !== 'paper-runs' ? 'active' : ''} onClick={() => navigate(page === 'paper-runs' ? 'backtest' : page)}>Strategy</button>
+          <button type="button" className={page !== 'paper-runs' && page !== 'accounts' ? 'active' : ''} onClick={() => navigate(page === 'paper-runs' || page === 'accounts' ? 'backtest' : page)}>Strategy</button>
           <button type="button" className={page === 'paper-runs' ? 'active' : ''} onClick={() => navigate('paper-runs')}>Paper Runs</button>
+          {liveTradingAvailable(EDITION) && <button type="button" className={page === 'accounts' ? 'active' : ''} onClick={() => navigate('accounts')}>Accounts</button>}
         </nav>
         <div className="top-status">
           <span><ShieldCheck size={13} />{paperMode}</span>
@@ -735,6 +745,8 @@ export function App() {
 
       {page === 'paper-runs' ? (
         <PaperRunsPreview onPrepare={() => preparePaper(false)} />
+      ) : page === 'accounts' ? (
+        <LiveAccountsPage onOpenRun={openRun} />
       ) : <>
 
       <section className="workbench">
@@ -778,7 +790,7 @@ export function App() {
       </div>
 
       {paperTabMounted && <div role="tabpanel" id="panel-paper" aria-labelledby="tab-paper" hidden={page !== 'paper-setup'}>
-        <PaperSetupPreview embedded source={source} fromBacktest={paperFromBacktest} fromEditor strategies={strategies} savedStrategy={loadedStrategy} catalogBusy={catalogBusy} onSelectStrategy={() => undefined} backtestTimeframe={timeframe} backtestSymbol={symbol} onPrepareVersion={preparePaperVersion} onBack={() => navigate('backtest')} onRuns={() => navigate('paper-runs')} />
+        <PaperSetupPreview embedded source={source} fromBacktest={paperFromBacktest} fromEditor strategies={strategies} savedStrategy={loadedStrategy} catalogBusy={catalogBusy} onSelectStrategy={() => undefined} backtestTimeframe={timeframe} backtestSymbol={symbol} onPrepareVersion={preparePaperVersion} onBack={() => navigate('backtest')} onRuns={() => navigate('paper-runs')} onAccounts={() => navigate('accounts')} />
       </div>}
 
       <div role="tabpanel" id="panel-backtest" aria-labelledby="tab-backtest" hidden={page !== 'backtest'}>

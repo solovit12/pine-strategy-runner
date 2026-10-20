@@ -11,6 +11,7 @@ from collections import deque
 from datetime import datetime, timedelta, timezone
 from decimal import Decimal, ROUND_DOWN, ROUND_UP
 import errno
+import fcntl
 import json
 import os
 from pathlib import Path
@@ -27,7 +28,6 @@ from nautilus_trader.adapters.hyperliquid import (
 )
 from nautilus_trader.adapters.lighter import (
     LighterDataClientConfig, LighterDataClientFactory, LighterDeployment, LighterEnvironment,
-    LighterExecutionClientConfig, LighterExecutionClientFactory,
 )
 from nautilus_trader.adapters.sandbox import SandboxExecutionClientConfig, SandboxExecutionClientFactory
 from nautilus_trader.common import Environment
@@ -42,6 +42,9 @@ from nautilus_trader.model import (
 from data_bridge import (
     OfflineSourceFactory, PaperFeedFactory, PublicBridge, SPECS, USDC, make_specs, track_key,
 )
+from live_venues import (  # noqa: F401 (classify_live_refusal, lighter_error_code: kept for the tests)
+    REAL_VENUES, LighterVenue, SandboxVenue, classify_live_refusal, lighter_error_code,
+)
 from pine_orders import PineOrderManager, outward_price
 from psr_sdk import Instrument, resolve_params
 from psr_sdk.packs import load_strategy
@@ -55,6 +58,7 @@ from diagnostics import DecisionDiagnostics
 
 PINNED_NAUTILUS = "2.0.0rc7"
 PINNED_FAST_NAUTILUS = "2.0.0rc7+hlfast5.1"
+LIVE_RECONCILIATION_LOOKBACK_MINS = 60
 RECOVERY_PROGRESS_MS = 30_000
 # A reconnected market without a fresh book is revived on its own: resubscribe its book
 # (the venue answers with a full snapshot) after these waits, the last one repeating.
@@ -195,7 +199,7 @@ PYTHON_STRATEGY = "python_strategy_v1"
 
 # Live trades Lighter mainnet only (owner decision 2026-10-15: no testnet).
 LIVE_KEYS = {"dailyLossLimitPercent", "maxLeverage", "exchangeStopPercent", "exchangeStopFrom", "maxSlippagePercent",
-             "maxPositionUsdc", "minimumOrderSize", "stateFile", "exchange"}
+             "maxPositionUsdc", "minimumOrderSize", "stateFile", "exchange", "accounts"}
 # Daily loss limit (owner decision 2026-10-16): the account equity (balance plus the open PnL of the
 # run's positions, gains included) against the equity captured at the first start of the day. The
 # day starts at 06:00 UTC. The reference is kept in live.stateFile on the server, so a new run, a
@@ -235,9 +239,6 @@ LIVE_EXCHANGE_PNL_MAX_AGE_S = 30
 # a data gap) allows live.maxSlippagePercent, 3 % unless set (0.05 to 50). Limit orders keep their price.
 LIVE_DEFAULT_SLIPPAGE_PERCENT = Decimal("3")
 LIVE_SLIPPAGE_PERCENT_RANGE = (Decimal("0.05"), Decimal("50"))
-# Lighter limits how far a stop's worst price may sit from its trigger (error 21735; the limit is
-# not published): a refused exchange-side stop is placed again with 1 %, then 0.5 % before the run halts.
-LIVE_SAFETY_FALLBACK_BPS = (100, 50)
 # Minimum order size (owner decision 2026-10-16, after the first DOGE run): 15 % above Lighter's minimum
 # notional. The Lighter module refuses every order below the minimum at its worst price, closes and the
 # exchange-side stop included; a long's stop and market close sell below the entry, so an entry at
@@ -257,39 +258,7 @@ LIVE_SAFETY_LOST_GRACE_S = 2.0
 LIVE_POSITION_CHECK_S = 10
 LIVE_POSITION_MISMATCHES_TO_HALT = 2
 LIVE_ORDER_NO_ANSWER_S = 30
-LIGHTER_REST = "https://mainnet.zklighter.elliot.ai"
 
-# Exchange refusals in Live, by Lighter error code (apidocs.lighter.xyz, "Data Structures, Constants
-# and Errors"; owner decision 2026-10-15, see docs/LIVE_TRADING_DESIGN.md "Exchange refusals").
-LIGHTER_ERROR_GROUPS = {
-    # Trading refusals, nothing opened: the market pauses, the refusal is counted.
-    **dict.fromkeys((21739, 21301, 21507, 21508, 21732, 21738, 21733, 21734, 21601), "refused"),
-    # Rate limits, nothing opened: no new entries in the whole run for a while; counted.
-    **dict.fromkeys((23000, 21506, 30009, 30010), "rate_limit"),
-    # The order may have executed: the market sends nothing until the position check confirms.
-    **dict.fromkeys((29500, 29501), "unknown_outcome"),
-    # Nonce out of step, nothing opened: the Lighter client refreshes it; counted.
-    **dict.fromkeys((21104, 21105), "nonce"),
-    # The API key or its signature is not accepted: nothing can be traded, closing may fail too.
-    **dict.fromkeys((21108, 21109, 21110, 21120, 20013), "key"),
-    # Liquidation, an account restriction, a bad order of ours or a closed market: halt.
-    **dict.fromkeys((21111, 21112, 52002, 23100, 52001, 21701, 21702, 21704, 21705, 21706, 21727, 21728,
-                     21602, 21605, 21618, 20008), "halt"),
-}
-# A sequencer refusal of an acknowledged order carries Lighter's message without its code.
-LIGHTER_ERROR_MESSAGES = {
-    "not enough margin to create the order": 21739, "not enough collateral": 21301,
-    "below maintenance margin": 21507, "below initial margin": 21508, "reduce only increases position": 21732,
-    "invalid reduce only direction": 21738, "accidental price": 21733, "too far from the mark price": 21734,
-    "order book is full": 21601, "too many pending txs": 21506, "too many request": 23000,
-    "batch transaction nonce is not increasing": 21105, "invalid nonce": 21104, "invalid signature": 21120,
-    "api key not found": 21109, "invalid api key index": 21110, "pre-liquidation": 21111,
-    "account is in liquidation": 21112, "invalid base amount": 21701, "invalid price": 21702,
-    "invalid order base or quote amount": 21706, "client order index already exists": 21728,
-    "invalid market index": 21602, "invalid market status": 21605, "order book does not exist": 20008,
-    "process timeout": 29501, "internal server error": 29500,
-    "too far from the trigger price": 21735,
-}
 LIVE_REFUSAL_PAUSE_MS = 1_000
 LIVE_RATE_LIMIT_PAUSE_MS = 30_000
 LIVE_MAX_REFUSALS_IN_ROW = 5  # per market
@@ -303,79 +272,66 @@ LIVE_EXIT_RETRY_DELAYS_MS = (1_000, 2_000, 4_000, 8_000, 10_000)
 LIVE_MAX_EXIT_MISSES = 5
 
 
-def lighter_error_code(reason):
-    """Lighter's error code in an order refusal ("LIGHTER_21739: ..." or its known message), or None."""
-    match = re.search(r"LIGHTER_(\d+)", reason)
-    if match:
-        return int(match.group(1))
-    text = reason.lower()
-    return next((code for message, code in LIGHTER_ERROR_MESSAGES.items() if message in text), None)
-
-
-def classify_live_refusal(reason, denied=False):
-    """What a Live refusal is: refused, rate_limit, unknown_outcome, nonce, key, halt or unknown."""
-    if denied:
-        return "refused"  # refused by the engine itself before sending: nothing reached the exchange
-    code = lighter_error_code(reason)
-    if code is None:
-        # The Lighter client could not send the order at all (an unknown outcome never arrives as a refusal).
-        return "refused" if "dispatch failed" in reason else "unknown"
-    return LIGHTER_ERROR_GROUPS.get(code, "unknown")
-
-
 class LiveRefusalPolicy:
-    """Counts Live refusals and says when the run must halt (docs/LIVE_TRADING_DESIGN.md)."""
+    """Counts one exchange's Live refusals and says when the run must halt (docs/LIVE_TRADING_DESIGN.md)."""
 
-    def __init__(self):
+    def __init__(self, venue=None):
+        self.venue = venue or LighterVenue()
         self.in_row = {}
         self.recent = deque()
         self.nonce_in_row = 0
         self.entries_paused_until_ms = 0
         self.exit_misses = {}
 
-    def filled(self, market):
-        self.in_row[market] = 0
-        self.exit_misses[market] = 0
+    # Counters are keyed by track (venue and market), so the same market on two exchanges stays apart;
+    # `label` is the market as messages name it.
+    def filled(self, key):
+        self.in_row[key] = 0
+        self.exit_misses[key] = 0
         self.nonce_in_row = 0
 
-    def exit_missed(self, market):
+    def exit_missed(self, key, label=None):
         """An exit canceled without a fill: the pause before its next try, or why the run must halt."""
-        misses = self.exit_misses[market] = self.exit_misses.get(market, 0) + 1
+        market = label or key
+        misses = self.exit_misses[key] = self.exit_misses.get(key, 0) + 1
         if misses >= LIVE_MAX_EXIT_MISSES:
-            return None, f"Lighter canceled {misses} exit orders in a row on {market} without a fill"
+            return None, f"{self.venue.display} canceled {misses} exit orders in a row on {market} without a fill"
         return LIVE_EXIT_RETRY_DELAYS_MS[min(misses, len(LIVE_EXIT_RETRY_DELAYS_MS)) - 1], None
 
-    def refused(self, market, reason, at_ms, denied=False):
+    def refused(self, key, reason, at_ms, denied=False, label=None):
         """The refusal's group and, when the run must halt, why."""
-        group = classify_live_refusal(reason, denied)
+        market = label or key
+        group = self.venue.classify(reason, denied)
         if group == "unknown_outcome":
             return group, None
         if group == "key":
-            return group, (f"Lighter does not accept the API key or its signature ({reason}); closing may fail too, "
-                           "check the positions in the Lighter app")
+            name = self.venue.display
+            return group, (f"{name} does not accept the API key or its signature ({reason}); closing may fail too, "
+                           f"check the positions in the {name} app")
         if group in ("halt", "unknown"):
-            return group, f"Lighter refused an order on {market} ({reason})"
+            return group, f"{self.venue.display} refused an order on {market} ({reason})"
         if group == "rate_limit":
             self.entries_paused_until_ms = at_ms + LIVE_RATE_LIMIT_PAUSE_MS
         self.nonce_in_row = self.nonce_in_row + 1 if group == "nonce" else 0
-        self.in_row[market] = self.in_row.get(market, 0) + 1
+        self.in_row[key] = self.in_row.get(key, 0) + 1
         self.recent.append(at_ms)
         while self.recent and self.recent[0] <= at_ms - LIVE_REFUSAL_WINDOW_MS:
             self.recent.popleft()
         if self.nonce_in_row >= LIVE_MAX_NONCE_ERRORS_IN_ROW:
-            return group, f"Lighter refused {self.nonce_in_row} orders in a row for the order number (nonce)"
-        if self.in_row[market] >= LIVE_MAX_REFUSALS_IN_ROW:
-            return group, f"Lighter refused {self.in_row[market]} orders in a row on {market} (last: {reason})"
+            return group, f"{self.venue.display} refused {self.nonce_in_row} orders in a row for the order number (nonce)"
+        if self.in_row[key] >= LIVE_MAX_REFUSALS_IN_ROW:
+            return group, f"{self.venue.display} refused {self.in_row[key]} orders in a row on {market} (last: {reason})"
         if len(self.recent) >= LIVE_MAX_REFUSALS_WINDOW:
-            return group, f"Lighter refused {len(self.recent)} orders within 10 minutes (last: {reason})"
+            return group, f"{self.venue.display} refused {len(self.recent)} orders within 10 minutes (last: {reason})"
         return group, None
 
 
 def validate_live(raw: dict):
     """Live settings of a run, or nothing for Paper.
 
-    `exchange` is "lighter" (real orders, real money) or "sandbox": the same Live code path
-    against a simulator registered on the LIGHTER venue, for offline tests only.
+    `exchange` is "real" (real orders, real money on the exchanges of the run's tracks; "lighter" is
+    its earlier name) or "sandbox": the same Live code path against a simulator registered on each
+    exchange's venue, for offline tests only.
     """
     live = raw.get("live")
     if live is None:
@@ -386,15 +342,15 @@ def validate_live(raw: dict):
     if exchange == "sandbox":
         if raw.get("mode") != "offline":
             raise ValueError("the sandbox Live exchange is for offline tests only")
-    elif exchange == "lighter":
+    elif exchange in ("real", "lighter"):
         if raw.get("mode", "public") != "public":
             raise ValueError("Live trading needs public market data")
         if os.environ.get("PSR_LIVE_ENABLED") != "1":
             raise ValueError("Live trading is not enabled on this engine (PSR_LIVE_ENABLED)")
     else:
-        raise ValueError("live.exchange must be lighter or sandbox")
-    if any(spec.venue_key != "lighter" for spec in make_specs(raw.get("tracks"), require_both=False).values()):
-        raise ValueError("Live trading supports Lighter markets only")
+        raise ValueError("live.exchange must be real or sandbox")
+    if any(spec.venue_key not in REAL_VENUES for spec in make_specs(raw.get("tracks"), require_both=False).values()):
+        raise ValueError("Live trading supports Lighter and Hyperliquid markets only")
     if live.get("dailyLossLimitPercent") is None:
         live.pop("dailyLossLimitPercent", None)  # off
     else:
@@ -430,6 +386,17 @@ def validate_live(raw: dict):
     state_file = live.get("stateFile")
     if not isinstance(state_file, str) or not Path(state_file).is_absolute():
         raise ValueError("live.stateFile must be an absolute path")
+    # The Live account each exchange trades (owner, 2026-10-20): its name and the key file to read.
+    # Absent: a run from before accounts, which reads each exchange's single key file.
+    accounts = live.get("accounts")
+    if accounts is not None:
+        if not isinstance(accounts, dict) or set(accounts) - set(REAL_VENUES):
+            raise ValueError("live.accounts must map lighter / hyperliquid to an account")
+        for venue_key, account in accounts.items():
+            if (not isinstance(account, dict) or set(account) != {"id", "name", "file"}
+                    or not all(isinstance(account[field], str) and account[field] for field in account)
+                    or len(account["name"]) > 40 or not Path(account["file"]).is_absolute()):
+                raise ValueError(f"live.accounts.{venue_key} must have an id, a name and an absolute key file")
     if live.get("exchangeStopPercent") is None:
         raise ValueError("live.exchangeStopPercent is required")
     stop = positive(live["exchangeStopPercent"], "live.exchangeStopPercent")
@@ -446,52 +413,6 @@ def validate_live(raw: dict):
 
 def _usdc(value):
     return decimal_string(Decimal(value).quantize(Decimal("0.01")))
-
-
-def live_credentials():
-    """Account index, API key index and API secret from the credentials file on this machine.
-
-    The file is written by the app from the setup page (folder 0700, file 0600) or placed by the
-    server's operator in a closed folder; no message here ever contains the secret.
-    """
-    # The app's own folder (key saved from the setup page), then a server-managed closed folder.
-    folders = [Path(folder) for folder in (os.environ.get("PSR_LIVE_SECRETS_DIR"), "/etc/psr-secrets") if folder]
-    path = next((folder / "lighter-mainnet.env" for folder in folders if (folder / "lighter-mainnet.env").is_file()),
-                folders[0] / "lighter-mainnet.env")
-    values = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            name, value = line.split("=", 1)
-            values[name.strip()] = value.strip()
-    prefix = "LIGHTER_"
-    try:
-        account_index, key_index = int(values[prefix + "ACCOUNT_INDEX"]), int(values[prefix + "API_KEY_INDEX"])
-        secret = values[prefix + "API_SECRET"]
-    except (KeyError, ValueError):
-        raise ValueError(f"Live credentials are incomplete in {path}") from None
-    if not secret:
-        raise ValueError(f"Live API secret is empty in {path}")
-    return account_index, key_index, secret
-
-
-def lighter_positions(account_index):
-    """Signed position and open PnL per market from Lighter's public account snapshot (no API key)."""
-    url = f"{LIGHTER_REST}/api/v1/account?by=index&value={int(account_index)}&active_only=true"
-    request = urllib.request.Request(url, headers={"accept": "application/json"})
-    with urllib.request.urlopen(request, timeout=5) as response:
-        body = json.loads(response.read())
-    accounts = body.get("accounts") or []
-    if body.get("code") != 200 or len(accounts) != 1:
-        raise ValueError(f"unexpected Lighter account answer (code {body.get('code')})")
-    positions = {}
-    for row in accounts[0].get("positions") or []:
-        size = Decimal(str(row["position"]))
-        if size:
-            pnl = row.get("unrealized_pnl")
-            positions[str(row["symbol"])] = (-size if int(row["sign"]) < 0 else size,
-                                             Decimal(str(pnl)) if pnl not in (None, "") else None)
-    return positions
 
 
 def validate_python_config(raw: dict):
@@ -537,6 +458,12 @@ class PineTrackStrategy(TrackStrategy):
     TrackStrategy core. Decisions come from Pine order sets (PineOrderManager);
     every execution is a Sandbox IOC order against the current book.
     """
+
+    @property
+    def xname(self):
+        """This track's exchange as Live messages name it."""
+        venue = self.controller.live_venues.get(self.spec.venue_key)
+        return venue.display if venue is not None else self.spec.display
 
     def __init__(self, context):
         super().__init__(context)
@@ -687,7 +614,9 @@ class PineTrackStrategy(TrackStrategy):
         if self.controller.live is not None:
             # Live sends at once; the exchange matches against its own book. Only an IOC whose limit
             # the newest price has already left is skipped, without waiting for anything.
-            if request.kind == "entry" and at_ms < self.controller.live_refusals.entries_paused_until_ms:
+            if self.controller.venue_halted(self.spec.venue_key):
+                return "exchange_halted"  # this exchange stopped trading in this run
+            if request.kind == "entry" and at_ms < self.controller.live_refusals[self.spec.venue_key].entries_paused_until_ms:
                 return "rate_limited"  # Lighter's rate limit: no new entries for a while
             quote = self.last_quote
             if request.ioc and quote is not None and not (
@@ -864,7 +793,7 @@ class PineTrackStrategy(TrackStrategy):
             self._book_fill(event)
             state["quote"] += (state["requested"] - state["filled"]) * price
             state["filled"] = state["requested"]
-            self.controller.live_halt(f"{self.spec.market}: Lighter filled order {order_id} beyond its size "
+            self.controller.live_halt_on(self.spec.venue_key, f"{self.spec.market}: {self.xname} filled order {order_id} beyond its size "
                                       f"({decimal_string(state['requested'])}); the run stops and closes everything")
             self._complete_inflight()
             return
@@ -873,7 +802,7 @@ class PineTrackStrategy(TrackStrategy):
         if state["filled"] > state["requested"]:
             raise ValueError("Pine order overfill")
         if self.controller.live is not None:
-            self.controller.live_refusals.filled(self.spec.market)
+            self.controller.live_refusals[self.spec.venue_key].filled(self.spec.key)
         self._book_fill(event)
         if state["filled"] == state["requested"]:
             self._complete_inflight()
@@ -885,7 +814,7 @@ class PineTrackStrategy(TrackStrategy):
         before = self.position
         closing = min(qty, abs(before)) if before != 0 and (before < 0) == buy else Decimal("0")
         self._book_fill(event)
-        self.controller.live_refusals.filled(self.spec.market)
+        self.controller.live_refusals[self.spec.venue_key].filled(self.spec.key)
         self.manager.late_fill("buy" if buy else "sell", closing, qty - closing)
         if not self.controller.stopping:
             self._sync_safety_stop()
@@ -904,7 +833,7 @@ class PineTrackStrategy(TrackStrategy):
         closing = min(qty, abs(before)) if before != 0 and (before < 0) == buy else Decimal("0")
         self._book_fill(event)
         self.manager.late_fill("buy" if buy else "sell", closing, qty - closing)
-        self.controller.live_halt(f"{self.spec.market}: the exchange-side stop executed on Lighter at {event.last_px}; "
+        self.controller.live_halt_on(self.spec.venue_key, f"{self.spec.market}: the exchange-side stop executed on {self.xname} at {event.last_px}; "
                                   "the run stops and closes everything")
 
     def _book_fill(self, event):
@@ -979,7 +908,7 @@ class PineTrackStrategy(TrackStrategy):
             lost = self.safety if self.safety is not None and order_id == self.safety["id"] else None
             if lost is not None:
                 self.safety = None
-            self.controller.event(self.spec.key, f"exchange-side stop {order_id} removed from Lighter")
+            self.controller.event(self.spec.key, f"exchange-side stop {order_id} removed from {self.xname}")
             if not removed_by_us and not self.controller.stopping and self.position != 0:
                 # Lighter removes it when the position closes too, and that cancel can come just before
                 # the closing fill: decided after LIVE_SAFETY_LOST_GRACE_S (RuntimeController.check_live_orders).
@@ -988,7 +917,7 @@ class PineTrackStrategy(TrackStrategy):
         if order_id in self.flatten_ids:
             close = self.flatten_open.get(order_id)
             if close is not None:
-                self.controller.safe_event(self.spec.key, f"LIVE close {order_id} canceled by Lighter; filled "
+                self.controller.safe_event(self.spec.key, f"LIVE close {order_id} canceled by {self.xname}; filled "
                                            f"{decimal_string(close['filled'])} of {decimal_string(close['qty'])} "
                                            f"{self.spec.market}")
                 self._close_answered(order_id)
@@ -1004,12 +933,12 @@ class PineTrackStrategy(TrackStrategy):
                                   f"{decimal_string(state['filled'])} of {decimal_string(state['requested'])} {self.spec.market}")
         if self.controller.live is not None and state["filled"] <= 0 and state["request"].kind == "exit":
             # A canceled entry is an ordinary miss and is not retried; an exit is, after a pause.
-            delay, halt = self.controller.live_refusals.exit_missed(self.spec.market)
+            delay, halt = self.controller.live_refusals[self.spec.venue_key].exit_missed(self.spec.key, self.spec.market)
             if halt:
-                self.controller.live_halt(f"{halt}; the run stops and closes everything")
+                self.controller.live_halt_on(self.spec.venue_key, f"{halt}; the run stops and closes everything")
             else:
                 self.reject_until_ms = max(self.reject_until_ms, now_ms() + delay)
-                self.controller.event(self.spec.key, f"LIVE: Lighter canceled exit {order_id} without a fill; "
+                self.controller.event(self.spec.key, f"LIVE: {self.xname} canceled exit {order_id} without a fill; "
                                       f"next try in {delay // 1000} s")
         self._complete_inflight("no_liquidity" if state["filled"] <= 0 else None)
         held, self.test_held_fills = self.test_held_fills, []
@@ -1169,13 +1098,13 @@ class PineTrackStrategy(TrackStrategy):
             # The new stop is placed before the old one is removed: the position is never unprotected.
             # Both are reduce-only, so together they can never close more than the position.
             self._cancel_safety_order(current)
-        self.controller.event(self.spec.key, f"exchange-side stop on Lighter: {side.name.lower()} {qty} {self.spec.market} "
+        self.controller.event(self.spec.key, f"exchange-side stop on {self.xname}: {side.name.lower()} {qty} {self.spec.market} "
                               f"if price reaches {trigger} (reduce-only)")
 
     def safety_slippage_bps(self):
         """The exchange-side stop's caps: Max slippage, then narrower ones if Lighter refuses it (21735)."""
         bps = self.controller.live_slippage()["market_order_slippage_bps"]
-        return (bps, *(step for step in LIVE_SAFETY_FALLBACK_BPS if step < bps))
+        return (bps, *(step for step in self.controller.live_venues[self.spec.venue_key].stop_fallback_bps if step < bps))
 
     def judge_lost_safety(self, at):
         """After the grace: a stop Lighter removed matters only if the position is still open unprotected."""
@@ -1206,7 +1135,7 @@ class PineTrackStrategy(TrackStrategy):
         if crossed or repeated:
             # It triggered and was canceled (a gap past its price cap), or keeps disappearing: the
             # engine closes the position at market and stops instead of placing it again and again.
-            self.controller.live_halt(f"{self.spec.market}: Lighter canceled the exchange-side stop "
+            self.controller.live_halt_on(self.spec.venue_key, f"{self.spec.market}: {self.xname} canceled the exchange-side stop "
                                       + ("after the price reached it" if crossed else "twice within a minute")
                                       + "; the run closes the position at market and stops")
             return
@@ -1244,39 +1173,46 @@ class PineTrackStrategy(TrackStrategy):
             if self.safety is not None and order_id == self.safety["id"]:
                 # The position would stay without its exchange-side protection (owner decision 2026-10-15).
                 self.safety = None
-                if (lighter_error_code(reason) == 21735 and self.safety_cap_step + 1 < len(self.safety_slippage_bps())
+                if (self.controller.live_venues[self.spec.venue_key].stop_cap_refused(reason)
+                        and self.safety_cap_step + 1 < len(self.safety_slippage_bps())
                         and not self.controller.stopping):
                     self.safety_cap_step += 1
-                    self.controller.event(self.spec.key, "LIVE: Lighter finds the exchange-side stop's price cap too far "
+                    self.controller.event(self.spec.key, f"LIVE: {self.xname} finds the exchange-side stop's price cap too far "
                                           f"from its trigger; placing it with {self.safety_slippage_bps()[self.safety_cap_step] / 100}%")
                     self._sync_safety_stop()
                     return
-                self.controller.live_halt(f"{self.spec.market}: Lighter refused the exchange-side stop ({reason}); "
+                self.controller.live_halt_on(self.spec.venue_key, f"{self.spec.market}: {self.xname} refused the exchange-side stop ({reason}); "
                                           "the run stops and closes everything")
+            return
+        if self.controller.live_venues[self.spec.venue_key].classify(reason, stage == "denied") == "miss":
+            # Hyperliquid answers an IOC that met no resting order with a refusal: it ends like a canceled IOC.
+            self.controller.event(self.spec.key, f"{self.xname}: order {order_id} met no resting order ({reason})")
+            self._on_canceled(event)
             return
         if order_id in self.flatten_ids:
             self.flatten_refusals += 1
-            self.controller.safe_event(self.spec.key, f"LIVE close {order_id} refused by Lighter: {reason}; next try in "
+            self.controller.safe_event(self.spec.key, f"LIVE close {order_id} refused by {self.xname}: {reason}; next try in "
                                        f"{flatten_retry_s(self.flatten_refusals):g} s")
             self._close_answered(order_id)
             return
         state = self.inflight
-        self.controller.event(self.spec.key, f"Lighter refused order {order_id}: {reason}")
+        self.controller.event(self.spec.key, f"{self.xname} refused order {order_id}: {reason}")
         if state is None or event.client_order_id != state["id"]:
             return
         self.pending_order_ids.discard(order_id)
         at_ms = now_ms()
-        group, halt = self.controller.live_refusals.refused(self.spec.market, reason, at_ms, denied=stage == "denied")
+        group, halt = self.controller.live_refusals[self.spec.venue_key].refused(self.spec.key, reason, at_ms, denied=stage == "denied",
+                                                            label=self.spec.market)
         if group == "unknown_outcome":
             self.unconfirmed_since_ms = at_ms
             self.controller.event(self.spec.key, f"LIVE: the outcome of order {order_id} is unknown; {self.spec.market} "
-                                  "sends nothing until the position check confirms Lighter's position")
+                                  f"sends nothing until the position check confirms {self.xname}'s position")
         elif group == "rate_limit":
-            self.controller.event(self.spec.key, f"LIVE: Lighter rate limit; no new entries for "
+            self.controller.event(self.spec.key, f"LIVE: {self.xname} rate limit; no new entries for "
                                   f"{LIVE_RATE_LIMIT_PAUSE_MS // 1000} s")
         self.reject_until_ms = at_ms + LIVE_REFUSAL_PAUSE_MS
         if halt:
-            self.controller.live_halt(f"{halt}; the run stops and closes everything")
+            self.controller.live_halt_on(self.spec.venue_key, f"{halt}; the run stops and closes everything")
         self._complete_inflight("exchange_rejected")
 
     def on_order_cancel_rejected(self, event):
@@ -1285,7 +1221,7 @@ class PineTrackStrategy(TrackStrategy):
         # A cancel of an order that already ended (filled or canceled) is refused on a real exchange;
         # the order's own final answer, or the no-answer rule, decides what happens next.
         self._guard("order cancel rejected", lambda: self.controller.event(
-            self.spec.key, f"Lighter did not cancel order {event.client_order_id}: {event.reason}"), allow_during_stop=True)
+            self.spec.key, f"{self.xname} did not cancel order {event.client_order_id}: {event.reason}"), allow_during_stop=True)
 
     def live_flatten(self):
         """Stop: close the open position at market (reduce-only). Returns whether one was sent."""
@@ -1296,7 +1232,7 @@ class PineTrackStrategy(TrackStrategy):
         if instrument.min_quantity and qty < Decimal(str(instrument.min_quantity)):
             # Below Lighter's smallest order: no close can be sent for it.
             self.flatten_gave_up = True
-            self.controller.safe_event(self.spec.key, f"LIVE: {qty} {self.spec.market} left is below Lighter's "
+            self.controller.safe_event(self.spec.key, f"LIVE: {qty} {self.spec.market} left is below {self.xname}'s "
                                        "minimum order and cannot be closed by an order")
             return False
         side = OrderSide.SELL if self.position > 0 else OrderSide.BUY
@@ -1382,8 +1318,8 @@ class PineTrackStrategy(TrackStrategy):
         if any(str(order.client_order_id) not in own for order in self.cache.orders_open(instrument_id=self.exec_id)):
             if self.controller.live is not None:
                 self.recovery_audit_blocker = "foreign_order"
-                self.controller.live_halt(f"{self.spec.market}: after the data gap an order this run did not place is "
-                                          "open on Lighter (placed in the Lighter app?); the run stops and closes everything")
+                self.controller.live_halt_on(self.spec.venue_key, f"{self.spec.market}: after the data gap an order this run did not place is "
+                                          f"open on {self.xname} (placed in the {self.xname} app?); the run stops and closes everything")
                 return False
             raise ValueError("unowned open order during recovery")
         quote = self.last_quote
@@ -1398,8 +1334,8 @@ class PineTrackStrategy(TrackStrategy):
         if sandbox != self.position or self.position != self.manager.real_position():
             if self.controller.live is not None:
                 self.recovery_audit_blocker = "position_differs"
-                self.controller.live_halt(
-                    f"{self.spec.market}: after the data gap the run counts {decimal_string(self.position)}, Lighter's "
+                self.controller.live_halt_on(self.spec.venue_key, 
+                    f"{self.spec.market}: after the data gap the run counts {decimal_string(self.position)}, {self.xname}'s "
                     f"fills give {decimal_string(sandbox)} and the strategy holds {decimal_string(self.manager.real_position())}; "
                     "the run stops and closes everything")
                 return False
@@ -1499,6 +1435,17 @@ class SdkTrackStrategy(PineTrackStrategy):
         return row
 
 
+def live_reference_entry(path, account, period, equity):
+    """One account's starting equity of the day in the shared daily-limit file. Several Live runs (one
+    per account) share the file, so one of them reads and writes it at a time."""
+    with open(path.with_name(path.name + ".lock"), "a", encoding="utf-8") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            return RuntimeController._live_reference_entry(path, account, period, equity)
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
 class RuntimeController:
     def __init__(self, config, emitter):
         self.config = config
@@ -1524,6 +1471,7 @@ class RuntimeController:
         self.socket_status = {}
         self.connected_endpoints = set()
         self.started_ms = now_ms()
+        self.subscribed_ms = {}  # market -> when its bridge subscribed to the public feed
         self.recovery_started_ns = None
         self.recovery_gaps = {}
         self.recovery_count = 0
@@ -1545,33 +1493,45 @@ class RuntimeController:
         self.run_word = "LIVE" if self.live is not None else "Paper"  # in messages
         if self.live is not None:
             emitter.defer_fsync = True
-        self.live_reference = None  # {"period", "equity"}: the daily loss limit's starting equity
-        self.live_clean_checked = False
-        self.live_start_balance = None  # Live: the real balance at the start
-        self.live_account_index = None
-        self.live_refusals = LiveRefusalPolicy()
+        # One venue per exchange of the run: credentials, account check and refusal reading.
+        self.live_venues = {}
+        if self.live is not None:
+            for venue_key in sorted({spec.venue_key for spec in self.specs.values()}):
+                real = REAL_VENUES[venue_key]((self.live.get("accounts") or {}).get(venue_key))
+                self.live_venues[venue_key] = SandboxVenue(real) if self.live["exchange"] == "sandbox" else real
+        self.live_refusals = {key: LiveRefusalPolicy(venue) for key, venue in self.live_venues.items()}
+        # Per exchange: clean start checked, the real balance at the start, the daily loss limit's
+        # starting equity {"period", "equity"}.
+        # `halted`: why this exchange stopped trading (several exchanges in one run); `close_pending`:
+        # its positions still have to be closed (the watchdog starts that).
+        self.live_state = {key: {"clean": False, "start_balance": None, "reference": None, "halted": None,
+                                 "close_pending": False} for key in self.live_venues}
         self.live_test_positions = {}  # offline tests: positions the stand-in exchange reports on top
         self.live_test_pnl = {}  # offline tests: open PnL the stand-in exchange reports
-        self.live_exchange_pnl = {}  # market -> Lighter's open PnL at the last position check
+        self.live_exchange_pnl = {}  # track key -> the exchange's open PnL at the last position check
         self.live_exchange_pnl_at = 0.0
+        self.live_close_tasks = []  # closes of exchanges halted on their own
 
     # ----- Live limits ---------------------------------------------------------------
 
     def live_clean_start(self, strategy):
-        """A Live run starts only on an account without open positions or orders."""
-        if self.live_clean_checked:
+        """A Live run starts on each exchange only with an account without open positions or orders."""
+        venue_key = strategy.spec.venue_key
+        state = self.live_state[venue_key]
+        if state["clean"]:
             return
-        self.live_clean_checked = True
+        state["clean"] = True
+        name = self.live_venues[venue_key].display
         positions = strategy.cache.positions_open(venue=strategy.exec_venue)
         orders = strategy.cache.orders_open(venue=strategy.exec_venue)
         if positions or orders:
-            self.fail(f"The Lighter account already has {len(positions)} open position(s) and {len(orders)} open "
-                      "order(s) not opened by this run. Close them on Lighter, then start again.")
+            self.fail(f"The {name} account already has {len(positions)} open position(s) and {len(orders)} open "
+                      f"order(s) not opened by this run. Close them on {name}, then start again.")
             return
         loss = self.live.get("dailyLossLimitPercent")
-        self.live_start_balance = self.venue_cash(strategy)
+        state["start_balance"] = self.venue_cash(strategy)
         self.emitter.emit("event", venue=strategy.spec.display,
-                          message=f"LIVE run on Lighter mainnet: account clean; "
+                          message=f"LIVE run on {name} mainnet{self.live_venues[venue_key].account_note}: account clean; "
                                   f"{'entries at the market minimum order plus 15%, ' if self.live.get('minimumOrderSize') else ''}"
                                   f"account leverage {self.live['maxLeverage']}x, exchange-side stop "
                                   f"{self.live['exchangeStopPercent']}% from the "
@@ -1580,11 +1540,11 @@ class RuntimeController:
                                   f"max position {self.live.get('maxPositionUsdc', 'off')}"
                                   f"{' USDC' if self.live.get('maxPositionUsdc') else ''}, "
                                   f"daily loss limit {f'{loss}%' if loss else 'off'}")
-        equity = self.live_account_equity()
-        reference = self.live_reference_equity(equity)
+        equity = self.live_account_equity(venue_key)
+        reference = self.live_reference_equity(venue_key, equity)
         if loss and equity <= reference * (1 - Decimal(loss) / 100):
             self.fail(f"The daily loss limit of {loss}% is already used up for the day from "
-                      f"{self.live_reference['period'][11:16]} UTC: equity {_usdc(equity)} USDC against {_usdc(reference)} USDC. "
+                      f"{state['reference']['period'][11:16]} UTC: equity {_usdc(equity)} USDC against {_usdc(reference)} USDC. "
                       f"LIVE can start again after {LIVE_DAY_START_HOUR_UTC:02d}:00 UTC.")
 
     def live_equity(self, strategy):
@@ -1605,17 +1565,23 @@ class RuntimeController:
         bps = (Decimal(self.live["maxSlippagePercent"]) * 100).to_integral_value()
         return {"market_order_slippage_bps": max(1, int(bps))}
 
-    def live_account_equity(self):
-        """The account's balance plus the open PnL of every position of this run (gains count too)."""
-        equity = self.venue_cash(next(iter(self.strategies.values())))
+    def live_slippage(self):
+        """Order params: the run's Max slippage for a market-style order, in basis points."""
+        bps = (Decimal(self.live["maxSlippagePercent"]) * 100).to_integral_value()
+        return {"market_order_slippage_bps": max(1, int(bps))}
+
+    def live_account_equity(self, venue_key):
+        """One exchange's account balance plus the open PnL of this run's positions on it (gains count too)."""
+        strategies = [strategy for strategy in self.strategies.values() if strategy.spec.venue_key == venue_key]
+        equity = self.venue_cash(strategies[0])
         exchange_fresh = time.monotonic() - self.live_exchange_pnl_at <= LIVE_EXCHANGE_PNL_MAX_AGE_S
-        for strategy in self.strategies.values():
+        for strategy in strategies:
             quote = strategy.last_quote
             if strategy.position == 0:
                 continue
             if quote is None:
-                # No verified price (a data gap): Lighter's own open PnL from the last position check.
-                pnl = self.live_exchange_pnl.get(strategy.spec.market) if exchange_fresh else None
+                # No verified price (a data gap): the exchange's own open PnL from the last position check.
+                pnl = self.live_exchange_pnl.get(strategy.spec.key) if exchange_fresh else None
                 if pnl is not None:
                     equity += pnl
                 continue
@@ -1630,54 +1596,110 @@ class RuntimeController:
         start = at.replace(hour=LIVE_DAY_START_HOUR_UTC, minute=0, second=0, microsecond=0)
         return start if at >= start else start - timedelta(days=1)
 
-    def live_reference_equity(self, equity):
-        """Equity the daily loss limit measures from: captured at the first start of the day and kept in
-        live.stateFile, so later runs of the same day continue from it; a new day captures it anew."""
+    def live_reference_equity(self, venue_key, equity):
+        """Equity one exchange's daily loss limit measures from: captured at the first start of the day and
+        kept in live.stateFile (one entry per account), so later runs of the same day continue from it; a
+        new day captures it anew."""
+        state = self.live_state[venue_key]
         period = self.live_period_start().isoformat(timespec="seconds")
-        if self.live_reference is not None and self.live_reference["period"] == period:
-            return self.live_reference["equity"]
-        account = f"lighter-{self.live_account_index}" if self.live["exchange"] == "lighter" else "sandbox"
+        if state["reference"] is not None and state["reference"]["period"] == period:
+            return state["reference"]["equity"]
+        account = self.live_venues[venue_key].state_account
         path = Path(self.live["stateFile"])
+        reference, note = live_reference_entry(path, account, period, equity)
+        state["reference"] = {"period": period, "equity": reference}
+        first = next(strategy for strategy in self.strategies.values() if strategy.spec.venue_key == venue_key)
+        self.emitter.emit("event", venue=first.spec.display, message=f"LIVE daily loss limit {note}")
+        return reference
+
+    @staticmethod
+    def _live_reference_entry(path, account, period, equity):
+        """The account's starting equity of the day from the shared file, or this equity written as it
+        (callers hold the file's lock: live_reference_entry)."""
         stored = None
         try:
             stored = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, ValueError):
             pass
-        if isinstance(stored, dict) and stored.get("account") == account and stored.get("period") == period:
-            reference = Decimal(str(stored["equity"]))
+        if isinstance(stored, dict) and "accounts" not in stored and "account" in stored:
+            stored = {"accounts": {stored["account"]: stored}}  # the file of a single-exchange version
+        accounts = stored.get("accounts") if isinstance(stored, dict) and isinstance(stored.get("accounts"), dict) else {}
+        entry = accounts.get(account)
+        if isinstance(entry, dict) and entry.get("period") == period:
+            reference = Decimal(str(entry["equity"]))
             note = f"continues the day from {period[11:16]} UTC: starting equity {_usdc(reference)} USDC"
         else:
             reference = equity
-            temporary = path.with_name(path.name + ".tmp")
-            temporary.write_text(json.dumps({"account": account, "period": period, "equity": decimal_string(equity),
-                                             "capturedAt": utc_iso()}) + "\n", encoding="utf-8")
+            accounts = {name: row for name, row in accounts.items() if isinstance(row, dict)}
+            accounts[account] = {"period": period, "equity": decimal_string(equity), "capturedAt": utc_iso()}
+            temporary = path.with_name(f"{path.name}.{os.getpid()}.tmp")
+            temporary.write_text(json.dumps({"accounts": accounts}) + "\n", encoding="utf-8")
             os.replace(temporary, path)
             note = f"new day from {period[11:16]} UTC: starting equity {_usdc(reference)} USDC"
-        self.live_reference = {"period": period, "equity": reference}
-        first = next(iter(self.strategies.values()))
-        self.emitter.emit("event", venue=first.spec.display, message=f"LIVE daily loss limit {note}")
-        return reference
+        return reference, note
 
     def check_live_limits(self):
-        """Halt when the account equity falls live.dailyLossLimitPercent below the day's starting equity."""
-        if not self.live or self.stopping or not self.live_clean_checked:
+        """Halt when an exchange's account equity falls live.dailyLossLimitPercent below its day's starting equity."""
+        if not self.live or self.stopping:
             return
-        try:
-            equity = self.live_account_equity()
-        except ValueError:
-            return  # the account is not loaded yet
-        reference = self.live_reference_equity(equity)
         loss = self.live.get("dailyLossLimitPercent")
-        if not loss or reference <= 0 or equity > reference * (1 - Decimal(loss) / 100):
+        for venue_key, state in self.live_state.items():
+            if not state["clean"] or state["halted"]:
+                continue
+            try:
+                equity = self.live_account_equity(venue_key)
+            except ValueError:
+                continue  # the account is not loaded yet
+            reference = self.live_reference_equity(venue_key, equity)
+            if not loss or reference <= 0 or equity > reference * (1 - Decimal(loss) / 100):
+                continue
+            drop = (reference - equity) / reference * 100
+            name = self.live_venues[venue_key].display
+            self.live_halt_on(venue_key, f"daily loss limit reached{'' if len(self.live_state) == 1 else f' on {name}'}: "
+                           f"equity {_usdc(equity)} USDC is {_usdc(drop)}% below "
+                           f"{_usdc(reference)} USDC at the start of the day ({state['reference']['period'][11:16]} UTC; "
+                           f"limit {loss}%); the run stops and closes everything")
             return
-        drop = (reference - equity) / reference * 100
-        self.live_halt(f"daily loss limit reached: equity {_usdc(equity)} USDC is {_usdc(drop)}% below "
-                       f"{_usdc(reference)} USDC at the start of the day ({self.live_reference['period'][11:16]} UTC; "
-                       f"limit {loss}%); the run stops and closes everything")
 
     def live_halt(self, reason):
         """Stop a Live run on a safety condition; the stop closes every position at market."""
         self.request_stop(f"LIVE halt: {reason}")
+
+    def live_halt_on(self, venue_key, reason):
+        """A safety condition of one exchange (owner decision 2026-10-19): in a run on several exchanges
+        only that exchange stops trading and closes its positions; the others trade on. A run on one
+        exchange, or one whose last trading exchange halts, stops as a whole."""
+        if len(self.live_venues) <= 1:
+            self.live_halt(reason)
+            return
+        state = self.live_state[venue_key]
+        if state["halted"] or self.stopping:
+            return
+        name = self.live_venues[venue_key].display
+        state["halted"] = reason.replace("; the run stops and closes everything", "").replace(
+            "; the run stops and closes everything", "")
+        if all(other["halted"] for other in self.live_state.values()):
+            self.live_halt("; ".join(f"{self.live_venues[key].display}: {other['halted']}"
+                                     for key, other in self.live_state.items()))
+            return
+        state["close_pending"] = True
+        first = next(strategy for strategy in self.strategies.values() if strategy.spec.venue_key == venue_key)
+        self.safe_event(first.spec.key, f"LIVE halt on {name}: {state['halted']}; trading on {name} stops and its "
+                                        "positions close at market, the other exchanges trade on")
+        for strategy in self.strategies.values():
+            if strategy.spec.venue_key == venue_key:
+                try:
+                    strategy.stop_new_orders()
+                except Exception as exc:
+                    self.safe_event(strategy.spec.key, f"LIVE: cancel pending orders failed: {type(exc).__name__}: {exc}")
+
+    def live_where(self):
+        """The run's Live exchanges as messages name them ("Lighter", "Lighter and Hyperliquid")."""
+        return " and ".join(venue.display for venue in self.live_venues.values()) or "the exchange"
+
+    def venue_halted(self, venue_key):
+        state = self.live_state.get(venue_key) if self.live is not None else None
+        return bool(state and state["halted"])
 
     # ----- Live position check (Lighter: after a reconnect, trust the account snapshot) ----
 
@@ -1687,17 +1709,26 @@ class RuntimeController:
                 if strategy.inflight is None and not strategy.pending_order_ids}
 
     async def live_exchange_positions(self):
-        """(signed position, open PnL or None) per market as the exchange reports it."""
-        if self.live["exchange"] == "lighter":
-            return await asyncio.to_thread(lighter_positions, self.live_account_index)
-        positions = {}  # offline tests: the Sandbox standing in for Lighter
+        """(signed position, open PnL or None) per track key as the exchange reports it."""
+        positions = {}
+        for venue in self.live_venues.values():
+            if not venue.sandbox:
+                try:
+                    positions.update(await asyncio.to_thread(venue.fetch_positions))
+                except Exception as exc:
+                    # One exchange unanswered skips the whole check: its markets would read as flat.
+                    exc.venue_display = venue.display
+                    raise
         for strategy in self.strategies.values():
+            if not self.live_venues[strategy.spec.venue_key].sandbox:
+                continue
+            # Offline tests: the Sandbox standing in for the exchange.
             signed = Decimal("0")
             for position in strategy.cache.positions_open(instrument_id=strategy.exec_id):
                 qty = Decimal(str(position.quantity))
                 signed += qty if str(position.side).upper().endswith("LONG") else -qty
-            market = strategy.spec.market
-            positions[market] = (self.live_test_positions.get(market, signed), self.live_test_pnl.get(market))
+            key = strategy.spec.key
+            positions[key] = (self.live_test_positions.get(key, signed), self.live_test_pnl.get(key))
         return positions
 
     def check_live_orders(self):
@@ -1715,17 +1746,17 @@ class RuntimeController:
                     return
             safety = getattr(strategy, "safety", None)
             if safety and not safety["accepted"] and at_ns - safety["sent_ns"] > LIVE_ORDER_NO_ANSWER_S * 1_000_000_000:
-                self.live_halt(f"{strategy.spec.market}: Lighter has not confirmed the exchange-side stop for "
+                self.live_halt_on(strategy.spec.venue_key, f"{strategy.spec.market}: {self.live_venues[strategy.spec.venue_key].display} has not confirmed the exchange-side stop for "
                                f"{LIVE_ORDER_NO_ANSWER_S} s; the run stops and closes everything")
                 return
             since = getattr(strategy, "unconfirmed_since_ms", None)
             if since is not None and at_ms - since > LIVE_UNCONFIRMED_MAX_MS:
-                self.live_halt(f"{strategy.spec.market}: Lighter did not confirm the position after an order of unknown "
+                self.live_halt_on(strategy.spec.venue_key, f"{strategy.spec.market}: {self.live_venues[strategy.spec.venue_key].display} did not confirm the position after an order of unknown "
                                f"outcome within {LIVE_UNCONFIRMED_MAX_MS // 1000} s; the run stops and closes everything")
                 return
             state = strategy.inflight
             if state is not None and at_ns - state["sent_ns"] > LIVE_ORDER_NO_ANSWER_S * 1_000_000_000:
-                self.live_halt(f"{strategy.spec.market}: order {state['id']} has had no final answer from Lighter "
+                self.live_halt_on(strategy.spec.venue_key, f"{strategy.spec.market}: order {state['id']} has had no final answer from {self.live_venues[strategy.spec.venue_key].display} "
                                f"for {LIVE_ORDER_NO_ANSWER_S} s; the run stops and closes everything")
                 return
 
@@ -1759,20 +1790,20 @@ class RuntimeController:
             if strategy.inflight is not None or strategy.pending_order_ids or (
                     strategy.position, strategy.broker_revision) != (position, revision):
                 continue  # an order moved while the exchange was asked: compare next time
-            venue = exchange.get(strategy.spec.market, (Decimal("0"), None))[0]
+            venue = exchange.get(key, (Decimal("0"), None))[0]
             if venue == position:
                 strategy.position_mismatches = 0
                 if strategy.unconfirmed_since_ms is not None:
                     strategy.unconfirmed_since_ms = None
-                    self.event(key, f"LIVE: Lighter confirms {decimal_string(position)} {strategy.spec.market}; "
+                    self.event(key, f"LIVE: {self.live_venues[strategy.spec.venue_key].display} confirms {decimal_string(position)} {strategy.spec.market}; "
                                     "the market trades again")
                     strategy._try_orders(now_ms())
                 continue
             strategy.position_mismatches += 1
-            text = f"the run counts {decimal_string(position)} {strategy.spec.market}, Lighter shows {decimal_string(venue)}"
+            text = f"the run counts {decimal_string(position)} {strategy.spec.market}, {self.live_venues[strategy.spec.venue_key].display} shows {decimal_string(venue)}"
             if strategy.position_mismatches >= LIVE_POSITION_MISMATCHES_TO_HALT:
-                self.live_halt(f"{strategy.spec.market}: position differs from Lighter ({text}); the run stops and "
-                               "closes what it holds — check the Lighter app")
+                self.live_halt_on(strategy.spec.venue_key, f"{strategy.spec.market}: position differs from {self.live_venues[strategy.spec.venue_key].display} ({text}); the run stops and "
+                               f"closes what it holds — check the {self.live_venues[strategy.spec.venue_key].display} app")
                 return
             self.event(key, f"LIVE position check: {text}; checking again")
 
@@ -1835,6 +1866,10 @@ class RuntimeController:
                    if strategy.spec.venue_key == venue)
 
     def venue_cash(self, strategy):
+        venue = self.live_venues.get(strategy.spec.venue_key)
+        cash = venue.cash() if venue is not None else None
+        if cash is not None:
+            return cash  # Hyperliquid: every dex of the account from the info API (Nautilus counts the main dex only)
         account = strategy.cache.account_for_venue(strategy.exec_venue)
         balance = account.balance(USDC) if account else None
         if balance is None:
@@ -1882,6 +1917,8 @@ class RuntimeController:
         key = "hyperliquid" if "hyperliquid" in endpoint.lower() else "lighter" if "lighter" in endpoint.lower() else None
         self.emitter.emit("event", venue=SPECS[key].display if key else None,
                           message=f"public socket {endpoint}: {state}")
+        if key == "hyperliquid" and "user" in endpoint.lower():
+            return  # Hyperliquid's account stream: its prices come from the data stream, which drives recovery
         connected = state in ("SocketState.CONNECTED", "CONNECTED")
         if connected:
             self.connected_endpoints.add(endpoint)
@@ -2237,7 +2274,7 @@ class RuntimeController:
         self.stage = "stopping"
         try:
             self.record_unresolved_gaps()
-            self.emitter.emit("phase", stage="stopping", message=(f"Stopping LIVE; closing every position on Lighter: {reason}"
+            self.emitter.emit("phase", stage="stopping", message=(f"Stopping LIVE; closing every position on {self.live_where()}: {reason}"
                               if self.live is not None else f"Stopping both Paper accounts: {reason}"))
         except OSError:
             pass
@@ -2295,6 +2332,7 @@ class RuntimeController:
                 raise ValueError("markets disagree on shared venue balance")
             accounts.append({"venue": venue_spec.display, "cashBalance": rows[0]["cashBalance"],
                 **({"startBalance": rows[0]["startBalance"]} if "startBalance" in rows[0] else {}),
+                **({"halted": rows[0]["halted"]} if "halted" in rows[0] else {}),
                 **{name: sum(row[name] for row in rows) for name in counters},
                 "priceReady": all(row["priceReady"] for row in rows),
                 "positions": [position for row in rows for position in row["positions"]]})
@@ -2362,12 +2400,15 @@ def build_node(config, controller):
     feeds = {}
     offline_sources = {}
     live = config.get("live")
-    real = live is not None and live["exchange"] == "lighter"
+    real = live is not None and live["exchange"] in ("real", "lighter")
     builder = (LiveNode.builder(
         f"PSR-PAPER-{config['runId'][:8]}", TraderId("PSR-PAPER-001"), Environment.LIVE if real else Environment.SANDBOX,
-    ).with_delay_post_stop_secs(0).with_timeout_connection(30 if real else 20))
-    # Live starts from the account as the exchange reports it (open orders, positions, fills).
-    builder = (builder.with_reconciliation(True).with_timeout_reconciliation(120).with_reconciliation_lookback_mins(1440)
+    ).with_delay_post_stop_secs(0).with_timeout_connection(90 if real else 20))  # Hyperliquid needed over 30 s on Tokyo
+    # Live starts from the account as the exchange reports it. Open orders and positions always come
+    # back; the lookback only bounds old order and fill history, which earlier runs fill with orders
+    # Nautilus cannot match and records as external (owner decision 2026-10-19: 60 minutes, was 24 h).
+    builder = (builder.with_reconciliation(True).with_timeout_reconciliation(120)
+               .with_reconciliation_lookback_mins(LIVE_RECONCILIATION_LOOKBACK_MINS)
                if real else builder.with_reconciliation(False))
     for key, spec in SPECS.items():
         venue_specs = [track for track in controller.specs.values() if track.venue_key == key]
@@ -2395,17 +2436,7 @@ def build_node(config, controller):
             RoutingConfig(default=False, venues=[str(spec.paper_venue)]),
         )
         if live is not None and real:
-            account_index, key_index, secret = live_credentials()
-            controller.live_account_index = account_index
-            builder = builder.add_exec_client(
-                str(spec.source_venue), LighterExecutionClientFactory(),
-                LighterExecutionClientConfig(
-                    account_id=AccountId(f"LIGHTER-{account_index}"), account_index=account_index,
-                    api_key_index=key_index, private_key=secret,
-                    environment=LighterEnvironment.MAINNET,
-                    deployment=LighterDeployment.LIGHTER,
-                ))
-            del secret
+            builder = controller.live_venues[key].add_exec_client(builder, spec.source_venue)
             continue
         fee_row = config["fees"][key]
         maker_rate = Decimal(str(fee_row["makerPercent"])) / Decimal("100")
@@ -2493,15 +2524,17 @@ async def monitor_stdin(controller, offline_sources):
                 elif command == "snapshot" and controller.config["mode"] == "offline":
                     controller.snapshot()
                 elif command == "live_exchange_position" and controller.config["mode"] == "offline" and controller.live:
-                    controller.live_test_positions[str(item["market"])] = Decimal(str(item["quantity"]))
+                    test_key = track_key(item.get("venue", "lighter"), str(item["market"]))
+                    controller.live_test_positions[test_key] = Decimal(str(item["quantity"]))
                 elif command == "live_exchange_pnl" and controller.config["mode"] == "offline" and controller.live:
-                    controller.live_test_pnl[str(item["market"])] = Decimal(str(item["pnl"]))
+                    test_key = track_key(item.get("venue", "lighter"), str(item["market"]))
+                    controller.live_test_pnl[test_key] = Decimal(str(item["pnl"]))
                 elif command == "live_test_drop_safety" and controller.config["mode"] == "offline" and controller.live:
                     # Offline test: the stand-in exchange removes the exchange-side stop on its own.
-                    strategy = controller.strategies[track_key("lighter", str(item["market"]))]
+                    strategy = controller.strategies[track_key(item.get("venue", "lighter"), str(item["market"]))]
                     strategy.cancel_order(ClientOrderId.from_str(strategy.safety["id"]))
                 elif command == "live_test_hold_fill" and controller.config["mode"] == "offline" and controller.live:
-                    controller.strategies[track_key("lighter", str(item["market"]))].test_hold_fill = True
+                    controller.strategies[track_key(item.get("venue", "lighter"), str(item["market"]))].test_hold_fill = True
                 elif command == "trade" and controller.config["mode"] == "offline":
                     key = track_key(item["venue"], item.get("market", "HYPE"))
                     if key not in controller.specs or key not in offline_sources:
@@ -2534,6 +2567,10 @@ async def watchdog(controller, node_task):
             controller.parent_gone("controlling API process died")
             return
         try:
+            for venue_key, state in controller.live_state.items() if controller.live is not None else ():
+                if state["close_pending"]:
+                    state["close_pending"] = False
+                    controller.live_close_tasks.append(asyncio.create_task(live_close_all(controller, venue_key)))
             controller.check_live_limits()
             controller.check_live_orders()
             controller.check_live_gaps()
@@ -2569,7 +2606,7 @@ async def watchdog(controller, node_task):
             if controller.track_recovering(key):
                 continue
             last = controller.last_public_ms[key]
-            if last is None and at_ms - controller.started_ms > 30_000:
+            if last is None and at_ms - controller.subscribed_ms.get(key, at_ms) > 30_000:
                 controller.fail(f"{controller.specs[key].display} {controller.specs[key].market} public feed produced no frames for 30 seconds", key)
                 return
             if last is not None and at_ms - last > 60_000:
@@ -2620,16 +2657,17 @@ async def live_position_check(controller):
             exchange = await controller.live_exchange_positions()
         except Exception as exc:
             failures += 1
-            limited = getattr(exc, "code", None) in (429, 405)  # Lighter's rate limit
+            limited = getattr(exc, "code", None) in (429, 405)  # the exchange's rate limit
+            name = getattr(exc, "venue_display", None) or controller.live_where()
             if limited or failures == 1 or failures % 30 == 0:
-                controller.emitter.emit("event", venue="Lighter", message=(
-                    f"LIVE position check: Lighter account not available ({type(exc).__name__}: {exc}); "
-                    + ("Lighter's request limit: next check in 60 s; " if limited else "") + "trading continues"))
+                controller.emitter.emit("event", venue=name, message=(
+                    f"LIVE position check: {name} account not available ({type(exc).__name__}: {exc}); "
+                    + (f"{name}'s request limit: next check in 60 s; " if limited else "") + "trading continues"))
             if limited:
-                await asyncio.sleep(60)  # Lighter's cooldown; checks resume after it
+                await asyncio.sleep(60)  # the exchange's cooldown; checks resume after it
             continue
         failures = 0
-        controller.live_exchange_pnl = {market: pnl for market, (_, pnl) in exchange.items() if pnl is not None}
+        controller.live_exchange_pnl = {key: pnl for key, (_, pnl) in exchange.items() if pnl is not None}
         controller.live_exchange_pnl_at = time.monotonic()
         try:
             controller.check_live_positions(before, exchange)
@@ -2638,17 +2676,24 @@ async def live_position_check(controller):
             return
 
 
-async def live_close_all(controller):
-    """Live stop: close every position at market (reduce-only), then remove this run's orders.
+async def live_close_all(controller, venue_key=None):
+    """Live stop: close every position at market (reduce-only), then remove this run's orders. With
+    `venue_key`: only that exchange's, after it halted on its own while the others trade on.
 
     A position that did not close within LIVE_FLATTEN_WAIT_S keeps its exchange-side stop and is
     named in the stop reason, to be closed in the Lighter app. Every market closes on its own: a failure on one (or a log line that
     cannot be written) never stops the others.
     """
+    strategies = [strategy for strategy in controller.strategies.values()
+                  if venue_key is None or strategy.spec.venue_key == venue_key]
+    names = sorted({controller.live_venues[strategy.spec.venue_key].display for strategy in strategies})
+    where = " and ".join(names) or "the exchange"
     await asyncio.sleep(0.5)  # cancels of working engine orders settle first
     deadline = time.monotonic() + LIVE_FLATTEN_WAIT_S
     while time.monotonic() < deadline:
-        open_markets = [strategy for strategy in controller.strategies.values()
+        if venue_key is not None and controller.stopping:
+            return  # the whole run stops now: its own close takes over every market
+        open_markets = [strategy for strategy in strategies
                         if strategy.position != 0 and not strategy.flatten_gave_up]
         if not open_markets:
             break
@@ -2660,11 +2705,12 @@ async def live_close_all(controller):
                 controller.safe_event(strategy.spec.key, f"LIVE close failed: {type(exc).__name__}: {exc}")
         await asyncio.sleep(0.2)
     still_open = []
-    for strategy in controller.strategies.values():
+    for strategy in strategies:
         if strategy.position != 0:
-            # An accepted exchange-side stop stays on Lighter and keeps protecting it.
-            still_open.append(f"{strategy.spec.market} {decimal_string(strategy.position)} ("
-                              + ("its exchange-side stop stays on Lighter" if strategy.safety_resting()
+            # An accepted exchange-side stop stays on the exchange and keeps protecting it.
+            name = controller.live_venues[strategy.spec.venue_key].display
+            still_open.append(f"{strategy.spec.market} on {name} {decimal_string(strategy.position)} ("
+                              + (f"its exchange-side stop stays on {name}" if strategy.safety_resting()
                                  else "no exchange-side stop") + ")")
             continue
         try:
@@ -2674,12 +2720,13 @@ async def live_close_all(controller):
     await asyncio.sleep(1.0)  # the cancels reach the exchange before the node stops
     # The stop's outcome ends the stop reason, so the API and the run page state it (owner decision 2026-10-16).
     if still_open:
-        note = (f"LIVE: positions still open on Lighter after the stop: {', '.join(still_open)} — close them in "
-                "the Lighter app")
+        note = (f"LIVE: positions still open on {where} after the stop: {', '.join(still_open)} — close them in "
+                f"the {where} app")
     else:
-        note = "LIVE: every position of this run is closed on Lighter"
-    controller.stop_reason = f"{controller.stop_reason or 'stopped'}; {note}"
-    for strategy in controller.strategies.values():
+        note = f"LIVE: every position of this run is closed on {where}"
+    if venue_key is None:
+        controller.stop_reason = f"{controller.stop_reason or 'stopped'}; {note}"
+    for strategy in strategies:
         controller.safe_event(strategy.spec.key, note)
         break
 
@@ -2697,7 +2744,7 @@ async def run(config, emitter):
     try:
         node, offline_sources = build_node(config, controller)
         controller.emitter.emit("phase", stage="waiting_for_data", message=(
-            "LIVE: Nautilus starting with the real Lighter account" if controller.live is not None
+            f"LIVE: Nautilus starting with the real {controller.live_where()} account" if controller.live is not None
             else "Nautilus Sandbox starting selected markets on two shared venue accounts"))
         # Reported on the first Hyperliquid track: a run need not include HYPE (or Hyperliquid at all).
         hyperliquid_track = next((key for key, spec in controller.specs.items() if spec.venue_key == "hyperliquid"), None)

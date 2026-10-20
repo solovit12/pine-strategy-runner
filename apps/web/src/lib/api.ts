@@ -7,8 +7,8 @@ import type {
   StrategySummary,
 } from '../../../../packages/shared/src/strategy-catalog-contracts';
 import type {
-  LiveConnectionCheck, LiveSettingsView, PaperExperimentActivity, PaperExperimentCapabilities, PaperExperimentDetail,
-  PaperExperimentSummary, SaveLiveSettingsRequest, StartPaperExperimentRequest,
+  CreateLiveAccountRequest, LiveAccountView, LiveAccountsView, LiveConnectionCheck, PaperExperimentActivity,
+  PaperExperimentCapabilities, PaperExperimentDetail, PaperExperimentSummary, StartPaperExperimentRequest, UpdateLiveAccountRequest,
 } from '../../../../packages/shared/src/paper-experiment-contracts';
 
 export type PaperCapabilities = PaperExperimentCapabilities;
@@ -195,23 +195,29 @@ export async function stopPaperExperiment(id: string): Promise<PaperExperimentDe
   return result.experiment;
 }
 
-export async function loadLiveSettings(signal?: AbortSignal): Promise<LiveSettingsView> {
-  return (await parse<{ settings: LiveSettingsView }>(await fetch('/api/live/settings', { signal }))).settings;
+export async function loadLiveAccounts(signal?: AbortSignal): Promise<LiveAccountsView> {
+  return parse<LiveAccountsView>(await fetch('/api/live/accounts', { signal }));
 }
 
 /** The API private key is sent once and stored on the machine that runs the engine; it never comes back. */
-export async function saveLiveSettings(input: SaveLiveSettingsRequest): Promise<LiveSettingsView> {
-  return (await parse<{ settings: LiveSettingsView }>(await fetch('/api/live/settings', {
-    method: 'PUT',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify(input),
-  }))).settings;
+export async function createLiveAccount(input: CreateLiveAccountRequest): Promise<LiveAccountView> {
+  return (await parse<{ account: LiveAccountView }>(await fetch('/api/live/accounts', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input),
+  }))).account;
 }
 
-export async function removeLiveKey(): Promise<LiveSettingsView> {
-  return (await parse<{ settings: LiveSettingsView }>(await fetch('/api/live/settings/key', { method: 'DELETE' }))).settings;
+export async function updateLiveAccount(id: string, input: UpdateLiveAccountRequest): Promise<LiveAccountView> {
+  return (await parse<{ account: LiveAccountView }>(await fetch(`/api/live/accounts/${encodeURIComponent(id)}`, {
+    method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input),
+  }))).account;
 }
 
-export async function checkLiveConnection(): Promise<LiveConnectionCheck> {
-  return (await parse<{ check: LiveConnectionCheck }>(await fetch('/api/live/check', { method: 'POST' }))).check;
+export async function removeLiveAccount(id: string): Promise<LiveAccountsView> {
+  return parse<LiveAccountsView>(await fetch(`/api/live/accounts/${encodeURIComponent(id)}`, { method: 'DELETE' }));
+}
+
+export async function checkLiveAccount(id: string): Promise<LiveConnectionCheck> {
+  return (await parse<{ check: LiveConnectionCheck }>(await fetch(`/api/live/accounts/${encodeURIComponent(id)}/check`, {
+    method: 'POST',
+  }))).check;
 }

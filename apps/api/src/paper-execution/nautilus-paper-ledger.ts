@@ -64,6 +64,8 @@ const SnapshotAccount = z.object({
   cashBalance: CashBalance,
   /** Live: the real balance when the run started (its realized and total PnL are counted from it). */
   startBalance: CashBalance.optional(),
+  /** Live on several exchanges: why this exchange stopped trading while the others trade on. */
+  halted: z.string().min(1).max(2_000).optional(),
   brokerRevision: Count,
   publicFrames: Count,
   pendingOrders: Count,
@@ -81,7 +83,7 @@ const DataGap = z.object({
   connected: z.boolean(),
   resubscribes: Count,
 }).strict();
-const SnapshotTrack = SnapshotAccount.omit({ cashBalance: true, startBalance: true, brokerRevision: true, positions: true })
+const SnapshotTrack = SnapshotAccount.omit({ cashBalance: true, startBalance: true, halted: true, brokerRevision: true, positions: true })
   .extend({ market: Market, dataGap: DataGap.optional() }).strict();
 const Message = z.discriminatedUnion('type', [
   z.object({ ...Base, type: z.literal('phase'),
@@ -523,7 +525,7 @@ function controlEvents(detail: PaperExperimentDetail): PaperExperimentActivityEv
     { id: 'control:created', at: detail.createdAt, kind: 'created', message: `${run} created.` },
   ];
   if (detail.startedAt) result.push({ id: 'control:started', at: detail.startedAt,
-    kind: 'started', message: detail.live ? 'LIVE trading started on Lighter.' : 'Paper execution started.' });
+    kind: 'started', message: detail.live ? 'LIVE trading started.' : 'Paper execution started.' });
   if (detail.endedAt) result.push({ id: 'control:ended', at: detail.endedAt,
     kind: 'stopped', message: detail.status === 'completed' ? `${run} completed.` : `${run} interrupted.` });
   return result;
@@ -539,7 +541,7 @@ function activityEvent(message: NautilusPaperMessageV1, live = false): PaperExpe
   if (message.type === 'pine_bar') return { ...base, kind: 'signal', message: message.message };
   if (message.type === 'phase') return { ...base, kind: 'status',
     message: message.stage === 'stopping'
-      ? (live ? 'Stopping LIVE; closing every position on Lighter.' : 'Stopping both virtual accounts.') : message.message };
+      ? (live ? 'Stopping LIVE; closing every position of this run.' : 'Stopping both virtual accounts.') : message.message };
   if (message.type === 'event' && (message.message.startsWith(RECOVERY_DIAGNOSTIC_PREFIX)
     || message.message.startsWith(PAPER_DIAGNOSTIC_PREFIX)
     || message.message.startsWith(PAPER_LATENCY_PREFIX))) return null;
@@ -550,7 +552,7 @@ function activityEvent(message: NautilusPaperMessageV1, live = false): PaperExpe
     message: live ? 'LIVE engine failed; the run stops and closes every position.' : 'Paper runtime failed; the experiment is stopping.' };
   if (message.type === 'stopped') return { ...base, kind: 'stopped', message: live ? 'LIVE engine stopped.' : 'Paper runtime stopped.' };
   if (message.type === 'fill') return { ...base, kind: 'fill', venue: message.venue, market: message.market,
-    message: `${message.kind === 'entry' ? 'Entry' : 'Exit'} ${live ? 'fill on Lighter.' : 'virtual fill committed.'}` };
+    message: `${message.kind === 'entry' ? 'Entry' : 'Exit'} ${live ? `fill on ${message.venue}.` : 'virtual fill committed.'}` };
   return null;
 }
 

@@ -113,8 +113,9 @@ export const LIVE_MAX_LEVERAGE = 50;
 export const LIVE_MAX_EXCHANGE_STOP_PERCENT = 50;
 
 /**
- * Live trading (full edition, Lighter mainnet only): real orders on the owner's Lighter account.
- * Limits are chosen by the owner at launch; see docs/LIVE_TRADING_DESIGN.md.
+ * Live trading (full edition): real orders on the owner's Lighter and/or Hyperliquid accounts, one run
+ * on both at once. Limits are chosen by the owner at launch and apply on each exchange; see
+ * docs/LIVE_TRADING_DESIGN.md and docs/HYPERLIQUID_LIVE_PLAN.md.
  */
 export const LiveTradingSettingsSchema = z.object({
   /**
@@ -133,6 +134,11 @@ export const LiveTradingSettingsSchema = z.object({
   maxPositionUsdc: z.number().finite().gt(0).max(1_000_000_000).optional(),
   /** Every entry is the market's smallest order Lighter accepts; Order size is not used. */
   minimumOrderSize: z.boolean().optional(),
+  /** The Live account (Accounts page) each exchange of the run trades; required at launch for every exchange. */
+  accounts: z.object({
+    lighter: z.string().regex(/^[a-z0-9-]{8,64}$/).optional(),
+    hyperliquid: z.string().regex(/^[a-z0-9-]{8,64}$/).optional(),
+  }).strict().optional(),
 }).strict();
 
 export type LiveTradingSettings = z.infer<typeof LiveTradingSettingsSchema>;
@@ -174,9 +180,6 @@ function validateLiveTracks(value: { tracks: readonly { venue: string; market: s
     if (track.venue === 'Lighter' && hip3Dex(track.market) !== null) {
       context.addIssue({ code: 'custom', path: ['tracks', index], message: 'Prefixed (HIP-3) markets exist only on Hyperliquid.' });
     }
-  }
-  if (value.live !== undefined && value.tracks.some((track) => track.venue !== 'Lighter')) {
-    context.addIssue({ code: 'custom', path: ['tracks'], message: 'Live trading supports Lighter markets only.' });
   }
 }
 

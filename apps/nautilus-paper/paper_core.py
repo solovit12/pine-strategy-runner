@@ -11,6 +11,7 @@ from decimal import Decimal
 from pathlib import Path
 import re
 import time
+from types import SimpleNamespace
 
 from nautilus_trader.config import StrategyConfig
 from nautilus_trader.model import BookType, OrderSide, QuoteTick, StrategyId
@@ -475,14 +476,26 @@ class TrackStrategy(Strategy):
                 row["openedAt"] = datetime.fromtimestamp(position.ts_opened / 1e9, timezone.utc) \
                     .isoformat(timespec="milliseconds").replace("+00:00", "Z")
             positions.append(row)
+        venue = getattr(self.controller, "live_venues", {}).get(self.spec.venue_key) if self.live else None
+        if venue is not None:
+            try:
+                cash = venue.cash()  # Hyperliquid: every dex of the account, from the info API
+            except Exception:
+                cash = None
+            if cash is not None:
+                balance = SimpleNamespace(total=SimpleNamespace(as_decimal=lambda cash=cash: cash))
         return {
             "venue": self.spec.display,
             # Live: the real balance only; before the account arrives there is no virtual stand-in.
             "cashBalance": (decimal_string(balance.total.as_decimal()) if balance
                             else "0" if self.live else self.run_config["capitalPerVenue"]),
             # Live: the real balance at the start, for the run's realized and total PnL.
-            **({"startBalance": decimal_string(self.controller.live_start_balance)}
-               if self.live and getattr(self.controller, "live_start_balance", None) is not None else {}),
+            **({"startBalance": decimal_string(start)}
+               if self.live and (start := (getattr(self.controller, "live_state", {}).get(self.spec.venue_key) or {})
+                                 .get("start_balance")) is not None else {}),
+            **({"halted": halted}
+               if self.live and (halted := (getattr(self.controller, "live_state", {}).get(self.spec.venue_key) or {})
+                                 .get("halted")) else {}),
             "brokerRevision": self.broker_revision,
             "publicFrames": self.controller.public_frames[self.spec.key],
             "pendingOrders": len(self.pending_order_ids),

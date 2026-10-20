@@ -266,6 +266,11 @@ class PublicBridge(Strategy):
         if self.wants_trades():
             self.subscribe_trades(self.spec.source_id)
         self.subscribe_socket_state()
+        # The feed's 30 s first-frame allowance starts here, once the node has connected and started
+        # the trader; a slow Live connect (Hyperliquid loads every market and the account) is not silence.
+        subscribed = getattr(self.controller, "subscribed_ms", None)
+        if subscribed is not None:
+            subscribed.setdefault(self.spec.key, int(time.time() * 1000))
 
     def wants_trades(self):
         """Only a strategy that asks for them (SDK `uses_trades`) gets the market's public trades."""

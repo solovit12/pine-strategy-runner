@@ -47,6 +47,7 @@ import { runPineWorker } from './worker-client.js';
 import { BinanceFuturesMarketListService } from './binance-futures-market-list.js';
 import { PaperExperimentControllerV1, type PaperExperimentRuntimeFactory } from './paper-execution/paper-experiment-controller.js';
 import { EDITION, liveTradingAvailable, pythonStrategiesAvailable, type Edition } from '../../../packages/shared/src/edition.js';
+import type { LiveExchange } from '../../../packages/shared/src/paper-experiment-contracts.js';
 import { createNativePaperFactory } from './paper-execution/native-strategies.js';
 import { createPaperRuntimeRouter, createPinePaperFactory } from './paper-execution/pine-paper-factory.js';
 import { fetchVenueVolumes, type PaperVenueKey } from './paper-execution/venue-markets.js';
@@ -286,8 +287,11 @@ export async function buildApp(options: BuildAppOptions = {}) {
   // server operator switched it off. The key stays in this folder; the engine reads it from there.
   const liveSecretsDir = options.liveSecretsDir ?? process.env.PSR_LIVE_SECRETS_DIR
     ?? (paperExperimentsDir ? path.join(path.dirname(paperExperimentsDir), 'live-secrets') : path.join(projectRoot, '.local', 'live-secrets'));
+  // Which account each active Live run trades comes from the run store (the controller, made below).
+  let busyLiveAccounts: () => ReadonlyMap<string, string> = () => new Map();
   const liveSettings = role === 'site' ? null : new LiveSettingsStore(liveSecretsDir,
-    options.liveServerSecretsDir === undefined ? '/etc/psr-secrets' : options.liveServerSecretsDir);
+    options.liveServerSecretsDir === undefined ? '/etc/psr-secrets' : options.liveServerSecretsDir,
+    process.env, () => busyLiveAccounts());
   const liveTrading = () => liveTradingAvailable(edition) && Boolean(liveSettings?.liveTrading());
   // Private Python strategy packs: absolute folders, never part of this repository.
   const strategyPacks = !pythonStrategies ? [] : (process.env.PSR_STRATEGY_PACKS ?? '').split(path.delimiter)
@@ -309,14 +313,19 @@ export async function buildApp(options: BuildAppOptions = {}) {
           hyperliquidFastBook: true,
         };
         return createPaperRuntimeRouter(createNativePaperFactory(shared),
-          createPinePaperFactory({ ...shared, strategyPacks, liveTrading, liveSecretsDir }));
+          createPinePaperFactory({ ...shared, strategyPacks, liveTrading, liveSecretsDir,
+            ...(liveSettings ? { liveAccount: (id: string | undefined, exchange: LiveExchange) => liveSettings.accountForRun(id, exchange) } : {}) }));
       })()
       : null;
   if (paperRuntimeFactory && strategyCatalogDir) getStrategyCatalog();
   const paperExperiments = role === 'site' ? null : new PaperExperimentControllerV1({
     directory: paperExperimentsDir, catalogConfigured: Boolean(strategyCatalogDir),
     runtimeFactory: paperRuntimeFactory, now, pythonStrategies, liveTrading,
+    liveExchanges: () => liveSettings?.liveExchanges() ?? [],
+    liveAccountName: (id) => liveSettings?.account(id)?.name ?? null,
+    legacyLiveAccountId: (exchange) => liveSettings?.legacyAccountId(exchange) ?? null,
   });
+  if (paperExperiments) busyLiveAccounts = () => paperExperiments.busyLiveAccounts();
   app.addHook('onClose', async () => { await paperExperiments?.close(); strategyCatalog?.close(); });
   // Runs the system stopped for a server shutdown start again once this engine is up.
   if (paperExperiments && paperRuntimeFactory && process.env.PSR_RESUME_AFTER_RESTART !== '0') {
@@ -430,7 +439,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     registerPaperRoutes(app, {
       paperExperiments, paperRuntimeFactory, paperRunsDir, strategyPacks, nautilusPython, projectRoot, getStrategyCatalog, pythonStrategies,
     });
-    if (liveSettings) registerLiveRoutes(app, { store: liveSettings, paperExperiments, nautilusPython, projectRoot });
+    if (liveSettings) registerLiveRoutes(app, { store: liveSettings, nautilusPython, projectRoot });
   } else if (engine) {
     registerEngineProxy(app, engine);
   }

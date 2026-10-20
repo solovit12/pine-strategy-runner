@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import type { PineLivePaperSettingsV1, StrategyDetail } from '../packages/shared/src/strategy-catalog-contracts';
 import {
-  DEFAULT_PAPER_FEES, PaperRunsPreview, PaperSetupPreview, baseMarket, paperSettingsEqual, paramError, parseParam, rankMarkets,
+  DEFAULT_PAPER_FEES, PaperRunsPreview, PaperSetupPreview, baseMarket, paperSettingsEqual, paramError, parseMarketList, parseParam, rankMarkets,
   validPaperSettings,
 } from '../apps/web/src/components/PaperScreens';
 import { findSavedPythonStrategy, pythonStrategySource } from '../apps/web/src/lib/python-strategy-library';
@@ -47,11 +47,11 @@ describe('generic Pine Paper setup', () => {
     expect(validPaperSettings({ ...settings, capitalPerVenue: 50 }, null)).toMatch(/at least 100 USDC/);
   });
 
-  it('validates Live settings: Lighter only, every limit required, leverage at most 50x', () => {
+  it('validates Live settings: both exchanges, every limit required, leverage at most 50x', () => {
     const live = { ...settings, tracks: [{ venue: 'Lighter' as const, market: 'BTC' }],
       live: { dailyLossLimitPercent: 10, maxLeverage: 3, exchangeStopPercent: 0.5, exchangeStopFrom: 'strategy_stop' as const } };
     expect(validPaperSettings(live, null)).toBeNull();
-    expect(validPaperSettings({ ...live, tracks: settings.tracks }, null)).toBe('Live trading supports Lighter markets only.');
+    expect(validPaperSettings({ ...live, tracks: settings.tracks }, null)).toBeNull(); // Lighter and Hyperliquid in one Live run
     expect(validPaperSettings({ ...live, live: { ...live.live, dailyLossLimitPercent: Number.NaN } }, null)).toMatch(/daily loss limit/);
     expect(validPaperSettings({ ...live, live: { ...live.live, dailyLossLimitPercent: 0.5 } }, null)).toMatch(/from 1% to 99%/);
     expect(validPaperSettings({ ...live, live: { ...live.live, dailyLossLimitPercent: 100 } }, null)).toMatch(/from 1% to 99%/);
@@ -198,6 +198,18 @@ describe('generic Pine Paper setup', () => {
     expect(rankMarkets(options, 'eth', [], volumes)).toEqual(['ETH', 'ETHFI', 'WETH']);
     expect(rankMarkets(options, 'zzz', [], volumes)).toEqual([]);
     expect(rankMarkets(options, '', [], null)).toEqual(options);
+  });
+
+  it('adds several markets typed or pasted at once: commas, spaces, any case; reports what it cannot add', () => {
+    const options = ['ADA', 'BTC', 'DOGE', 'ETH', 'HYPE', 'SOL', 'xyz:NVDA'];
+    expect(parseMarketList('btc, eth  sol;\nxyz:nvda', options, [], 15))
+      .toEqual({ add: ['BTC', 'ETH', 'SOL', 'xyz:NVDA'], unknown: [], already: [], overLimit: [] });
+    expect(parseMarketList('BTC, FOO eth ETH', options, ['BTC'], 15))
+      .toEqual({ add: ['ETH'], unknown: ['FOO'], already: ['BTC', 'ETH'], overLimit: [] });
+    expect(parseMarketList('ADA DOGE HYPE', options, ['BTC'], 3))
+      .toEqual({ add: ['ADA', 'DOGE'], unknown: [], already: [], overLimit: ['HYPE'] });
+    // The exchange's list not loaded yet: well-formed symbols pass, the server checks them at launch.
+    expect(parseMarketList('BTC, b@d', null, [], 15)).toEqual({ add: ['BTC'], unknown: ['b@d'], already: [], overLimit: [] });
   });
 
   it('finds the library entry that holds a pack strategy settings', async () => {

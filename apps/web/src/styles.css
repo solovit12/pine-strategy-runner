@@ -274,6 +274,7 @@ tbody tr:hover { background: #141a1c; }
 .paper-market-choice input { width: 16px; height: 16px; accent-color: var(--green); cursor: pointer; }
 .paper-market-choice input:disabled { opacity: .4; cursor: not-allowed; }
 .paper-market-unavailable { display: block; margin-top: 3px; color: #d5a363; font-size: 11px; }
+.paper-market-hint { display: block; margin-top: 3px; color: #9fb0b6; font-size: 11px; line-height: 1.4; }
 .paper-check-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin-top: 15px; }
 .paper-check-grid > div { min-height: 47px; padding: 10px 12px; display: flex; align-items: center; gap: 9px; border: 1px solid #344044; color: #c3ccd0; background: #0c1214; }
 .paper-check-grid svg { flex: 0 0 auto; color: var(--amber); }
@@ -451,6 +452,7 @@ tbody tr:hover { background: #141a1c; }
 .run-button.run-button-live { color: #fff; background: #c8383c; }
 .run-button.run-button-live:hover { background: #e0484c; }
 .paper-live-badge { display: inline-block; padding: 1px 7px; border: 1px solid #753638; color: var(--red); background: #211314; font: 750 11px/1.6 "Cascadia Code", Consolas, monospace; letter-spacing: .04em; }
+.paper-live-halted { display: inline-block; max-width: 100%; padding: 1px 7px; border: 1px solid #8a6a1f; color: #f0c45a; background: #221b0c; font-size: 12px; line-height: 1.6; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
 .paper-execution-rules { margin: 12px 0 0; padding-left: 18px; color: #c4ced1; font-size: 13px; line-height: 1.6; }
 .paper-form-grid select { min-height: 38px; width: 100%; padding: 7px 10px; border: 1px solid #38454a; color: #e3eaec; background: #0d1214; }
 .paper-live-settings .paper-form-grid input { width: 100%; min-height: 41px; padding: 7px 10px; border: 1px solid #38454a; outline: none; color: #e4ebed; background: #0d1214; }
@@ -518,3 +520,25 @@ tbody tr:hover { background: #141a1c; }
 /* Paper Runs: every run slot is taken — information, not a failure. */
 .paper-slots-note { display: flex; gap: 9px; align-items: center; margin-bottom: 16px; padding: 10px 14px; border: 1px solid var(--line); color: var(--muted); font-size: 13px; }
 .paper-slots-note > svg { flex: none; color: var(--muted); }
+
+/* Accounts page (LIVE accounts, owner 2026-10-20) */
+.live-accounts-page .paper-page-heading { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px; }
+.live-accounts-page .paper-page-heading p { max-width: 720px; color: #aeb9bd; font-size: 14px; line-height: 1.5; }
+.live-account-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; }
+.live-account-list .paper-card { margin-bottom: 0; }
+.live-account-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; }
+.live-account-head h2 { margin-top: 6px; overflow-wrap: anywhere; }
+.live-account-status { flex: 0 0 auto; padding: 3px 9px; border: 1px solid #38454a; color: #aeb9bd; font-size: 12px; }
+.live-account-status.busy { border-color: #24563f; color: var(--green); background: var(--green-deep); }
+.live-account-facts { display: grid; gap: 8px; margin: 14px 0 0; }
+.live-account-facts div { display: flex; justify-content: space-between; gap: 12px; font-size: 13px; }
+.live-account-facts dt { color: #84949a; }
+.live-account-facts dd { margin: 0; color: #dbe3e6; text-align: right; overflow-wrap: anywhere; }
+.live-account-run { padding: 0; border: 0; color: var(--green); background: none; font: inherit; text-decoration: underline; cursor: pointer; }
+.live-account-form .paper-form-grid input, .live-account-form .paper-form-grid select { width: 100%; min-height: 41px; padding: 7px 10px; border: 1px solid #38454a; outline: none; color: #e4ebed; background: #0d1214; }
+.live-account-form .paper-live-privacy { margin: 12px 0 14px; }
+.paper-live-accounts { margin-bottom: 14px; }
+.paper-live-accounts-manage { display: flex; align-items: flex-end; }
+@media (max-width: 640px) {
+  .live-account-list { grid-template-columns: 1fr; }
+}

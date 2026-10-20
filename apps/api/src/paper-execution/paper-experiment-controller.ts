@@ -6,11 +6,13 @@ import { pineCodeError } from '../../../../packages/pine-runtime/src/pine-errors
 import {
   LIVE_ALREADY_ACTIVE_MESSAGE,
   MAX_CONCURRENT_PAPER_EXPERIMENTS,
+  liveAccountBusyMessage,
   type PaperExperimentCapabilities,
   type PaperExperimentDetail,
   type PaperExperimentStatus,
   type PaperExperimentSummary,
   type PaperExperimentTrack,
+  type LiveExchange,
   type PaperExperimentRuntimeView,
   StartPaperExperimentSchema,
   type StartPaperExperimentRequest,
@@ -19,6 +21,7 @@ import {
   MAX_MARKETS_PER_RUN, MAX_MARKETS_PER_VENUE, type StrategyDetail,
 } from '../../../../packages/shared/src/strategy-catalog-contracts.js';
 import {
+  liveAccountConflict,
   PaperExperimentStoreError,
   PaperExperimentStoreV1,
   type PaperExperimentSnapshot,
@@ -128,6 +131,9 @@ export class PaperExperimentControllerV1 {
   readonly #catalogConfigured: boolean;
   readonly #pythonStrategies: boolean;
   readonly #liveTrading: () => boolean;
+  readonly #liveExchanges: () => readonly LiveExchange[];
+  readonly #liveAccountName: (id: string) => string | null;
+  readonly #legacyLiveAccountId: (exchange: LiveExchange) => string | null;
   #otherLiveOwnerReason: string | null = null;
   readonly #managed = new Map<string, ManagedExperiment>();
 
@@ -140,6 +146,12 @@ export class PaperExperimentControllerV1 {
     readonly pythonStrategies?: boolean;
     /** Live trading with real money: full edition with PSR_LIVE_ENABLED=1 on this engine. */
     readonly liveTrading?: boolean | (() => boolean);
+    /** Exchanges with a connected, switched-on Live account. */
+    readonly liveExchanges?: () => readonly LiveExchange[];
+    /** A Live account's name for messages (Accounts page). */
+    readonly liveAccountName?: (id: string) => string | null;
+    /** The account made from an exchange's single key of before accounts: what an older Live run trades. */
+    readonly legacyLiveAccountId?: (exchange: LiveExchange) => string | null;
   }) {
     this.#store = options.directory ? new PaperExperimentStoreV1(options.directory, options.now) : null;
     this.#directory = options.directory;
@@ -149,6 +161,9 @@ export class PaperExperimentControllerV1 {
     this.#pythonStrategies = options.pythonStrategies ?? true;
     const live = options.liveTrading ?? false;
     this.#liveTrading = typeof live === 'function' ? live : () => live;
+    this.#liveExchanges = options.liveExchanges ?? (() => (this.#liveTrading() ? ['lighter'] : []));
+    this.#liveAccountName = options.liveAccountName ?? (() => null);
+    this.#legacyLiveAccountId = options.legacyLiveAccountId ?? (() => null);
     if (this.#store) {
       try {
         // The previous process may have died after taking a Gateway batch.
@@ -165,6 +180,17 @@ export class PaperExperimentControllerV1 {
         }
       }
     }
+  }
+
+  /** Live account id -> the active Live run trading it (an older run trades its exchanges' first accounts). */
+  busyLiveAccounts(): Map<string, string> {
+    const busy = new Map<string, string>();
+    for (const run of this.#store?.activeLiveRuns() ?? []) {
+      const ids = run.accounts ? Object.values(run.accounts)
+        : run.venues.map((venue) => this.#legacyLiveAccountId(venue));
+      for (const id of ids) if (id) busy.set(id, run.id);
+    }
+    return busy;
   }
 
   capabilities(): PaperExperimentCapabilities {
@@ -187,7 +213,7 @@ export class PaperExperimentControllerV1 {
       maxConcurrentExperiments: MAX_CONCURRENT_PAPER_EXPERIMENTS,
       activeExperiments: this.#store?.activeExperimentCount() ?? 0,
       liveTrading: this.#liveTrading(),
-      liveActive: Boolean(this.#store?.activeLiveExperimentId()),
+      liveExchanges: this.#liveTrading() ? [...this.#liveExchanges()] : [],
       ...(this.#factory?.admissionLimits?.allowedMarkets
         ? { allowedMarkets: this.#factory.admissionLimits.allowedMarkets } : {}),
     };
@@ -269,8 +295,12 @@ export class PaperExperimentControllerV1 {
       }
       return { experiment: prior, existing: true };
     }
-    if ('live' in request.settings && request.settings.live && this.#store.activeLiveExperimentId()) {
-      throw new PaperExperimentControllerError('PAPER_EXPERIMENT_LIMIT', LIVE_ALREADY_ACTIVE_MESSAGE);
+    if ('live' in request.settings && request.settings.live) {
+      const conflict = liveAccountConflict(request.settings.live.accounts, this.#store.activeLiveRuns());
+      if (conflict === 'legacy') throw new PaperExperimentControllerError('PAPER_EXPERIMENT_LIMIT', LIVE_ALREADY_ACTIVE_MESSAGE);
+      if (conflict) {
+        throw new PaperExperimentControllerError('PAPER_EXPERIMENT_LIMIT', liveAccountBusyMessage(this.#liveAccountName(conflict) ?? conflict));
+      }
     }
     if (JSON.stringify(saved.version.paperSettings) !== JSON.stringify(request.settings)) {
       throw new PaperExperimentControllerError('SOURCE_VERSION_CONFLICT', 'Paper launch settings differ from the saved version. Save the changes as a new version before launch.');

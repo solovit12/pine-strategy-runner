@@ -7,6 +7,7 @@ import { DatabaseSync } from 'node:sqlite';
 import {
   LIVE_ALREADY_ACTIVE_MESSAGE,
   MAX_CONCURRENT_PAPER_EXPERIMENTS,
+  type LiveExchange,
   type PaperExperimentDetail,
   type PaperExperimentAccount,
   type PaperExperimentStatus,
@@ -77,6 +78,24 @@ export type PaperExperimentStoreErrorKind =
   | 'EXPERIMENT_LIMIT'
   | 'IDEMPOTENCY_CONFLICT'
   | 'NOT_FOUND';
+
+/** An active Live run and the accounts it trades (null: started before Live accounts existed). */
+export interface ActiveLiveRun {
+  readonly id: string;
+  readonly accounts: Partial<Record<LiveExchange, string>> | null;
+  readonly venues: readonly LiveExchange[];
+}
+
+/**
+ * Why a Live launch of these accounts cannot start next to the active Live runs: 'legacy' (a run from
+ * before Live accounts is active), the id of an account another run trades, or null.
+ */
+export function liveAccountConflict(requested: Partial<Record<LiveExchange, string>> | undefined,
+  runs: readonly ActiveLiveRun[]): string | null {
+  if (runs.some((run) => run.accounts === null)) return 'legacy';
+  const busy = new Set(runs.flatMap((run) => Object.values(run.accounts ?? {})));
+  return Object.values(requested ?? {}).find((id) => id !== undefined && busy.has(id)) ?? null;
+}
 
 export class PaperExperimentStoreError extends Error {
   constructor(readonly kind: PaperExperimentStoreErrorKind, message: string) {
@@ -252,18 +271,28 @@ export class PaperExperimentStoreV1 {
     return active?.id ?? null;
   }
 
-  /** The active run that trades real money, if any: one at a time (one Lighter account and API key). */
-  activeLiveExperimentId(): string | null {
+  /**
+   * Active runs that trade real money and the Live accounts they trade (`accounts` null: a run started
+   * before Live accounts existed, which trades each exchange's only account of that time).
+   */
+  activeLiveRuns(): ActiveLiveRun[] {
     const rows = this.#db.prepare(`SELECT id, settings_json FROM paper_experiments
       WHERE status IN (${ACTIVE_STATUSES.map(() => '?').join(',')})`)
       .all(...ACTIVE_STATUSES) as Array<{ id: string; settings_json: string }>;
-    return rows.find((row) => {
+    const runs: ActiveLiveRun[] = [];
+    for (const row of rows) {
+      let settings: { live?: { accounts?: Partial<Record<LiveExchange, string>> }; tracks?: Array<{ venue?: unknown }> };
       try {
-        return Boolean((JSON.parse(row.settings_json) as { live?: unknown }).live);
+        settings = JSON.parse(row.settings_json) as typeof settings;
       } catch {
-        return false;
+        continue;
       }
-    })?.id ?? null;
+      if (!settings.live) continue;
+      const venues = [...new Set((settings.tracks ?? []).map((track) => String(track.venue ?? '').toLowerCase()))]
+        .filter((venue): venue is LiveExchange => venue === 'lighter' || venue === 'hyperliquid');
+      runs.push({ id: row.id, accounts: settings.live.accounts ?? null, venues });
+    }
+    return runs;
   }
 
   activeExperimentCount(): number {
@@ -389,9 +418,12 @@ export class PaperExperimentStoreV1 {
       if (this.activeExperimentCount() >= MAX_CONCURRENT_PAPER_EXPERIMENTS) {
         throw new PaperExperimentStoreError('EXPERIMENT_LIMIT', `${MAX_CONCURRENT_PAPER_EXPERIMENTS} Paper experiments are already active.`);
       }
-      // Checked inside the same transaction, so two simultaneous Live launches cannot both pass.
-      if ('live' in input.request.settings && input.request.settings.live && this.activeLiveExperimentId()) {
-        throw new PaperExperimentStoreError('EXPERIMENT_LIMIT', LIVE_ALREADY_ACTIVE_MESSAGE);
+      // Checked inside the same transaction, so two simultaneous Live launches of one account cannot both pass.
+      const settings = input.request.settings;
+      const conflict = 'live' in settings && settings.live ? liveAccountConflict(settings.live.accounts, this.activeLiveRuns()) : null;
+      if (conflict === 'legacy') throw new PaperExperimentStoreError('EXPERIMENT_LIMIT', LIVE_ALREADY_ACTIVE_MESSAGE);
+      if (conflict) {
+        throw new PaperExperimentStoreError('EXPERIMENT_LIMIT', 'A chosen account is trading in another LIVE run. Choose another account or stop that run first.');
       }
       const count = this.#db.prepare('SELECT COUNT(*) AS count FROM paper_experiments').get() as { count: number };
       if (count.count >= MAX_EXPERIMENT_HISTORY) {

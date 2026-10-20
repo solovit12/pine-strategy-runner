@@ -36,11 +36,11 @@ class DipBuyer(Strategy):
 """
 
 
-def live_run(folder, label, markets=("SOL",), **live):
+def live_run(folder, label, markets=("SOL",), venues=("lighter",), **live):
     pack = folder / "live_pack"
     pack.mkdir(exist_ok=True)
     (pack / "dip.py").write_text(PACK)
-    tracks = [("lighter", market) for market in markets]
+    tracks = [(venue, market) for venue in venues for market in markets]
     run = PineRun(folder, label, tracks)
     run.config = {**pine_config(folder, label, tracks), "nativeStrategy": "python_strategy_v1",
                   "strategy": {"ref": "live_pack/dip:DipBuyer", "packPaths": [str(pack)], "params": {}},
@@ -53,12 +53,12 @@ def live_run(folder, label, markets=("SOL",), **live):
 async def enter(run, count=1):
     await run.start()
     now = time.time_ns() // 1_000_000
-    for _, market in run.tracks:
-        await run.send({"cmd": "bars", "venue": "lighter", "market": market, "bars": bars(3, now - 1000)})
+    for venue, market in run.tracks:
+        await run.send({"cmd": "bars", "venue": venue, "market": market, "bars": bars(3, now - 1000)})
     await run.wait(lambda: len(run.messages("warmed up on 3 bars")) == len(run.tracks), "warm-up")
     await run.prices(("98.90", "99.00"))
     await run.wait(lambda: len(run.fills("entry")) == count, "Live entry")
-    await run.wait(lambda: len(run.messages("exchange-side stop on Lighter")) == count, "exchange-side stop placed")
+    await run.wait(lambda: len(run.messages("exchange-side stop on ")) == count, "exchange-side stop placed")
     entries = run.fills("entry")
     return entries[0] if count == 1 else entries
 
@@ -114,6 +114,51 @@ async def take_profit_closes_the_position():
         finally:
             await run.close()
         print("live take-profit closes the position PASS", flush=True)
+
+
+async def two_exchanges_halt_one_at_a_time():
+    """One Live run on Lighter and Hyperliquid (owner decision 2026-10-19): a fault of one exchange halts
+    only that one and closes its position while the other trades on; when the last one halts, the run
+    stops. The same market on both exchanges keeps its own counters and position check."""
+    with tempfile.TemporaryDirectory(prefix="psr-live-") as tmp:
+        folder = Path(tmp)
+        run = live_run(folder, "live-two", venues=("lighter", "hyperliquid"))
+        try:
+            await enter(run, count=2)
+            assert run.messages("LIVE run on Lighter mainnet: account clean"), run.events
+            assert run.messages("LIVE run on Hyperliquid mainnet: account clean"), run.events
+            assert run.messages("exchange-side stop on Hyperliquid"), run.events
+            snapshot = await run.snapshot()
+            accounts = {a["venue"]: a for a in snapshot["accounts"]}
+            assert accounts["Lighter"]["positions"] and accounts["Hyperliquid"]["positions"], accounts
+            assert Decimal(accounts["Hyperliquid"]["startBalance"]) > 0, accounts
+            stored = json.loads((folder / "live-daily.json").read_text())
+            assert set(stored["accounts"]) == {"sandbox", "sandbox-hyperliquid"}, stored  # one day reference each
+
+            # Hyperliquid reports a different position twice: Hyperliquid halts and closes, Lighter trades on.
+            await run.send({"cmd": "live_exchange_position", "venue": "hyperliquid", "market": "SOL", "quantity": "0"})
+            await run.wait(lambda: run.messages("LIVE halt on Hyperliquid"), "Hyperliquid halted")
+            await run.wait(lambda: run.messages("every position of this run is closed on Hyperliquid"), "Hyperliquid closed")
+            snapshot = await run.snapshot()
+            accounts = {a["venue"]: a for a in snapshot["accounts"]}
+            assert not accounts["Hyperliquid"]["positions"] and "position differs" in accounts["Hyperliquid"]["halted"], accounts
+            assert accounts["Lighter"]["positions"] and "halted" not in accounts["Lighter"], accounts
+            assert not stopped_reason(run) and snapshot.get("stage") != "stopping", snapshot.get("stage")
+
+            # Lighter's position differs too: the last trading exchange halts and the run stops.
+            await run.send({"cmd": "live_exchange_position", "venue": "lighter", "market": "SOL", "quantity": "0"})
+            await run.finish()
+            [reason] = stopped_reason(run)
+            assert reason.startswith("LIVE halt: Lighter: SOL: position differs") or reason.startswith(
+                "LIVE halt: Hyperliquid: SOL: position differs"), reason
+            assert "Hyperliquid: SOL: position differs" in reason and "Lighter: SOL: position differs" in reason, reason
+            assert "LIVE: every position of this run is closed" in reason, reason
+        except Exception:
+            report(run, folder)
+            raise
+        finally:
+            await run.close()
+        print("live two exchanges halt one at a time PASS", flush=True)
 
 
 async def canceled_exit_retries_after_a_pause():
@@ -429,8 +474,8 @@ async def daily_loss_limit_closes_everything():
             exits = {f["market"]: f["quantity"] for f in run.fills("exit")}
             assert exits == {e["market"]: e["quantity"] for e in entries}, (exits, entries)
             stored = json.loads((folder / "live-daily.json").read_text())
-            assert (stored["account"], Decimal(stored["equity"])) == ("sandbox", Decimal("10000")), stored
-            assert stored["period"].endswith("06:00:00+00:00"), stored
+            assert Decimal(stored["accounts"]["sandbox"]["equity"]) == Decimal("10000"), stored
+            assert stored["accounts"]["sandbox"]["period"].endswith("06:00:00+00:00"), stored
         except Exception:
             report(run, folder)
             raise
@@ -471,7 +516,7 @@ async def daily_loss_limit_carries_over_the_day():
         try:
             await run.start()
             await run.wait(lambda: run.messages("new day from 06:00 UTC: starting equity 10000.00 USDC"), "new day")
-            assert json.loads(state.read_text())["period"] == period
+            assert json.loads(state.read_text())["accounts"]["sandbox"]["period"] == period
             await live_stop(run, "live new day done")
         except Exception:
             report(run, folder)
@@ -657,6 +702,17 @@ def refusals_follow_the_lighter_table():
     assert policy.refused("SOL", "LIGHTER_29501: process timeout", 0) == ("unknown_outcome", None)
     assert "check the positions in the Lighter app" in policy.refused("SOL", "LIGHTER_21120: invalid signature", 0)[1]
     assert "Lighter refused an order on SOL" in policy.refused("SOL", "LIGHTER_99999: new", 0)[1]
+    # The same market on two exchanges is counted apart (track keys); messages name the market.
+    policy = runtime.LiveRefusalPolicy()
+    for _ in range(4):
+        assert policy.refused("lighter:SOL", margin, 0, label="SOL")[1] is None
+    assert policy.refused("hyperliquid:SOL", margin, 0, label="SOL")[1] is None
+    assert "5 orders in a row on SOL" in policy.refused("lighter:SOL", margin, 0, label="SOL")[1]
+    policy = runtime.LiveRefusalPolicy()
+    for _ in range(4):
+        assert policy.exit_missed("lighter:SOL", "SOL")[1] is None
+    assert policy.exit_missed("hyperliquid:SOL", "SOL")[1] is None
+    assert "5 exit orders in a row on SOL" in policy.exit_missed("lighter:SOL", "SOL")[1]
 
     # Exits canceled without a fill retry after 1, 2, 4 and 8 s; the fifth in a row halts; a fill resets.
     policy = runtime.LiveRefusalPolicy()
@@ -667,6 +723,75 @@ def refusals_follow_the_lighter_table():
     policy.filled("SOL")
     assert policy.exit_missed("SOL") == (1_000, None)
     print("live refusals follow the Lighter table PASS", flush=True)
+
+
+def hyperliquid_refusals_and_account():
+    """Hyperliquid's refusal texts map to the same groups as Lighter's codes; its account (equity, cash,
+    positions) is read over the main dex and xyz from the info API (docs/HYPERLIQUID_LIVE_PLAN.md)."""
+    import live_venues
+    venue = live_venues.HyperliquidVenue()
+    classify = venue.classify
+    assert classify("Order could not immediately match against any resting orders. asset=5") == "miss"
+    assert classify("No liquidity available for market order") == "miss"
+    assert classify("Insufficient margin to place order. asset=5") == "refused"
+    assert classify("Order must have minimum value of $10. asset=5") == "refused"
+    assert classify("Reduce only order would increase position. asset=5") == "refused"
+    assert classify("Too many cumulative requests sent") == "rate_limit"
+    assert classify("User or API Wallet 0xabc does not exist.") == "key"
+    assert classify("Invalid nonce: duplicate nonce") == "nonce"
+    assert classify("Price must be divisible by tick size. asset=5") == "halt"
+    assert classify("anything new") == "halt"
+    assert classify("whatever", denied=True) == "refused"
+    sandbox = live_venues.SandboxVenue(venue)
+    assert sandbox.classify("Order could not immediately match against any resting orders.") == "miss"
+    assert (sandbox.display, sandbox.state_account, live_venues.SandboxVenue(live_venues.LighterVenue()).state_account) == (
+        "Hyperliquid", "sandbox-hyperliquid", "sandbox")
+
+    answers = {
+        "": {"marginSummary": {"accountValue": "120.5"}, "assetPositions": [
+            {"position": {"coin": "SOL", "szi": "-0.5", "unrealizedPnl": "1.25"}},
+            {"position": {"coin": "BTC", "szi": "0.0", "unrealizedPnl": "0"}}]},
+        "xyz": {"marginSummary": {"accountValue": "30"}, "assetPositions": [
+            {"position": {"coin": "xyz:NVDA", "szi": "0.2", "unrealizedPnl": "-0.75"}}]},
+    }
+    answers["mode"] = "default"
+    answers["spot"] = {"balances": [{"coin": "USDC", "total": "99.5"}, {"coin": "USDE", "total": "0.0"}]}
+
+    def info(body, timeout=5):
+        asked.append(body)
+        kind = {"userAbstraction": "mode", "spotClearinghouseState": "spot"}.get(body["type"])
+        return answers[kind or body.get("dex", "")]
+
+    asked = []
+    original = live_venues.hyperliquid_info
+    live_venues.hyperliquid_info = info
+    try:
+        venue.address = "0x" + "ab" * 20
+        account = venue.read_account()
+    finally:
+        live_venues.hyperliquid_info = original
+    assert [body.get("dex") for body in asked if body["type"] == "clearinghouseState"] == [None, "xyz"]
+    assert asked[0] == {"type": "userAbstraction", "user": venue.address}
+    assert account["equity"] == Decimal("150.5") and account["cash"] == Decimal("150.0"), account
+    assert account["positions"] == {"hyperliquid:SOL": (Decimal("-0.5"), Decimal("1.25")),
+                                    "hyperliquid:xyz:NVDA": (Decimal("0.2"), Decimal("-0.75"))}, account
+    assert venue.cash() == Decimal("150.0")  # the read stays in use for HYPERLIQUID_ACCOUNT_MAX_AGE_S
+    assert venue.state_account == "hyperliquid-" + venue.address
+    # A unified account keeps its USDC in the spot balance for every dex; the perp states show none.
+    unified = live_venues.HyperliquidVenue()
+    unified.address = venue.address
+    answers["mode"] = "unifiedAccount"
+    answers[""]["marginSummary"]["accountValue"] = answers["xyz"]["marginSummary"]["accountValue"] = "0.0"
+    live_venues.hyperliquid_info = info
+    try:
+        account = unified.read_account()
+        unified.read_account()
+    finally:
+        live_venues.hyperliquid_info = original
+    assert account["equity"] == Decimal("100.0") and account["cash"] == Decimal("99.5"), account
+    assert len(account["positions"]) == 2, account
+    assert sum(body["type"] == "userAbstraction" for body in asked) == 2  # once per venue, not per read
+    print("hyperliquid refusals and account PASS", flush=True)
 
 
 def expired_orders_are_handled_as_canceled():
@@ -711,7 +836,11 @@ def settings_are_refused():
         refused(config(mode="public"), "not enabled on this engine")
         refused(config(), "needs public market data")  # offline data with a real exchange
         refused(config(live_exchange="sandbox", mode="public"), "offline tests only")
-        refused(config(tracks=(("hyperliquid", "SOL"),), live_exchange="sandbox"), "Lighter markets only")
+        refused(config(live_exchange="lighter-testnet"), "live.exchange must be real or sandbox")
+        both = runtime.validate_config(config(tracks=(("lighter", "SOL"), ("hyperliquid", "SOL"), ("hyperliquid", "xyz:NVDA")),
+                                              live_exchange="sandbox"))
+        assert {spec.venue_key for spec in runtime.make_specs(both["tracks"], require_both=False).values()} == {
+            "lighter", "hyperliquid"}
         refused(config(live_exchange="sandbox", live_dailyLossLimitPercent="0.5"), "live.dailyLossLimitPercent must be 1..99")
         refused(config(live_exchange="sandbox", live_dailyLossLimitPercent="100"), "live.dailyLossLimitPercent must be 1..99")
         refused(config(live_exchange="sandbox", live_dailyLossLimitUsdc="5"), "live must contain only")
@@ -763,11 +892,67 @@ def settings_are_refused():
     print("live settings refused PASS", flush=True)
 
 
+
+def live_accounts_read_their_own_keys():
+    """Several Live runs at once (owner, 2026-10-20): each names its accounts and their key files; the
+    shared daily-limit file keeps every account's entry when runs write it together."""
+    import threading
+    from decimal import Decimal
+    import live_venues
+    import runtime
+    with tempfile.TemporaryDirectory(prefix="psr-live-accounts-") as tmp:
+        folder = Path(tmp)
+        lighter_file, hyperliquid_file = folder / "a.env", folder / "b.env"
+        lighter_file.write_text("LIGHTER_ACCOUNT_INDEX=7\nLIGHTER_API_KEY_INDEX=5\nLIGHTER_API_SECRET=abc\n", encoding="utf-8")
+        hyperliquid_file.write_text("HYPERLIQUID_ACCOUNT_ADDRESS=0x" + "cd" * 20 + "\nHYPERLIQUID_PK=0x" + "1" * 64 + "\n",
+                                    encoding="utf-8")
+        lighter = {"id": "acc-lighter-1", "name": "Sub 7", "file": str(lighter_file)}
+        assert live_venues.live_credentials(lighter) == (7, 5, "abc")
+        path, values = live_venues.secrets_file("hyperliquid-mainnet.env", {"id": "acc-hl-01", "name": "HL", "file": str(hyperliquid_file)})
+        assert path == hyperliquid_file and values["HYPERLIQUID_ACCOUNT_ADDRESS"] == "0x" + "cd" * 20
+        assert live_venues.LighterVenue(lighter).account_note == ' (account "Sub 7")'
+        assert live_venues.SandboxVenue(live_venues.LighterVenue(lighter)).account_note == ' (account "Sub 7")'
+        assert live_venues.HyperliquidVenue().account_note == ""
+
+        raw = pine_config(folder, "accounts", [("lighter", "SOL")])
+        raw["mode"] = "offline"
+        raw["live"] = {"exchange": "sandbox", "maxLeverage": "3", "exchangeStopPercent": "0.5",
+                       "exchangeStopFrom": "strategy_stop", "stateFile": str(folder / "daily.json"),
+                       "accounts": {"lighter": lighter}}
+        assert runtime.validate_config(raw)["live"]["accounts"]["lighter"]["name"] == "Sub 7"
+        for bad in ({"binance": lighter}, {"lighter": {**lighter, "file": "a.env"}}, {"lighter": {"id": "x", "name": "y"}},
+                    {"lighter": {**lighter, "name": "n" * 41}}, ["lighter"]):
+            try:
+                runtime.validate_config({**raw, "live": {**raw["live"], "accounts": bad}})
+            except ValueError as exc:
+                assert "live.accounts" in str(exc), exc
+            else:
+                raise AssertionError(f"accepted accounts {bad}")
+
+        # Two runs writing the day's starting equity at once: no account's entry is lost.
+        state = folder / "shared-daily.json"
+        period = "2026-10-20T06:00:00+00:00"
+        threads = [threading.Thread(target=runtime.live_reference_entry, args=(state, f"lighter-{index}", period, Decimal(100 + index)))
+                   for index in range(20)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+        stored = json.loads(state.read_text(encoding="utf-8"))["accounts"]
+        assert sorted(stored) == sorted(f"lighter-{index}" for index in range(20)), stored
+        reference, note = runtime.live_reference_entry(state, "lighter-3", period, Decimal(1))
+        assert reference == Decimal(103) and note.startswith("continues the day"), (reference, note)
+    print("live accounts read their own keys PASS", flush=True)
+
+
 if __name__ == "__main__":
     settings_are_refused()
+    live_accounts_read_their_own_keys()
     refusals_follow_the_lighter_table()
+    hyperliquid_refusals_and_account()
     expired_orders_are_handled_as_canceled()
     asyncio.run(take_profit_closes_the_position())
+    asyncio.run(two_exchanges_halt_one_at_a_time())
     asyncio.run(positions_may_exceed_the_balance_up_to_the_leverage())
     asyncio.run(max_position_shrinks_the_entry())
     asyncio.run(minimum_order_size_entry())

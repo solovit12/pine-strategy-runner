@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { buildApp } from '../apps/api/src/server.js';
 import { createPinePaperFactory, liveStopReason } from '../apps/api/src/paper-execution/pine-paper-factory.js';
+import { LiveSettingsStore } from '../apps/api/src/live-settings.js';
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { LiveStopOutcome } from '../apps/web/src/components/PaperRuns.js';
@@ -84,15 +85,12 @@ async function setup(spawnChild?: (configPath: string) => ChildProcessWithoutNul
   temporary.push(directory);
   const catalogDir = path.join(directory, 'catalog');
   const runtimeDir = path.join(directory, 'runs');
-  // LIVE needs a connected account: a stand-in key (never a real one) saved the way the setup page saves it.
+  // LIVE trades the accounts added on the Accounts page; the engine reads each account's key file.
   const liveSecretsDir = path.join(directory, 'live-secrets');
-  if (process.env.PSR_LIVE_ENABLED === '1') {
-    mkdirSync(liveSecretsDir, { mode: 0o700 });
-    writeFileSync(path.join(liveSecretsDir, 'lighter-mainnet.env'),
-      `LIGHTER_ACCOUNT_INDEX=1\nLIGHTER_API_KEY_INDEX=4\nLIGHTER_API_SECRET=${'ab'.repeat(40)}\n`, { mode: 0o600 });
-  }
+  const accounts = new LiveSettingsStore(liveSecretsDir, null, {});
   const factory = createPinePaperFactory({ projectRoot: root, catalogDir, runtimeDir, pythonPath: python,
-    liveTrading: process.env.PSR_LIVE_ENABLED === '1', dependencies: {
+    liveTrading: process.env.PSR_LIVE_ENABLED === '1',
+    liveAccount: (id, exchange) => accounts.accountForRun(id, exchange), dependencies: {
       checkRuntime: async () => {}, stopGraceMs: 30_000, catalog: async () => [sol],
       candles: async (_market, _settings, fromMs, toMs) => flat(fromMs, toMs),
       ...(spawnChild ? { spawn: spawnChild } : {}),
@@ -100,12 +98,22 @@ async function setup(spawnChild?: (configPath: string) => ChildProcessWithoutNul
   const app = await buildApp({ strategyCatalogDir: catalogDir, paperExperimentsDir: path.join(directory, 'control'),
     paperRunsDir: runtimeDir, paperRuntimeFactory: factory, edition: 'full', liveSecretsDir, liveServerSecretsDir: null });
   apps.push(app);
-  const saved = await app.inject({ method: 'POST', url: '/api/strategies', payload: {
-    name: 'Live launch', source, backtestSettings, paperSettings: liveSettings } });
-  expect(saved.statusCode, saved.body).toBe(201);
-  const start = () => app.inject({ method: 'POST', url: '/api/paper-experiments', payload: {
-    strategyId: saved.json().strategy.id, version: 1, sourceSha256, settings: liveSettings, idempotencyKey: randomUUID() } });
-  return { app, runtimeDir, start };
+  /** A Lighter account as the Accounts page adds it: a stand-in key, never a real one. */
+  const addLighter = async (name: string, accountIndex: number) => {
+    const created = await app.inject({ method: 'POST', url: '/api/live/accounts', payload: {
+      exchange: 'lighter', name, enabled: true, accountIndex, apiKeyIndex: 4, apiKey: 'ab'.repeat(40) } });
+    expect(created.statusCode, created.body).toBe(200);
+    return created.json().account.id as string;
+  };
+  /** Saves the strategy with these settings and starts it. */
+  const launch = async (settings: Record<string, unknown>) => {
+    const saved = await app.inject({ method: 'POST', url: '/api/strategies', payload: {
+      name: `Live ${randomUUID().slice(0, 8)}`, source, backtestSettings, paperSettings: settings } });
+    expect(saved.statusCode, saved.body).toBe(201);
+    return app.inject({ method: 'POST', url: '/api/paper-experiments', payload: {
+      strategyId: saved.json().strategy.id, version: 1, sourceSha256, settings, idempotencyKey: randomUUID() } });
+  };
+  return { app, runtimeDir, liveSecretsDir, addLighter, launch };
 }
 
 describe('Live stop outcome', () => {
@@ -136,64 +144,83 @@ describe('Live stop outcome', () => {
 });
 
 describe('Live launch', () => {
-  it('refuses Hyperliquid markets in Live settings', async () => {
-    const { app } = await setup();
-    const saved = await app.inject({ method: 'POST', url: '/api/strategies', payload: {
-      name: 'Live HL', source, backtestSettings,
-      paperSettings: { ...liveSettings, tracks: [{ venue: 'Hyperliquid', market: 'SOL' }] } } });
-    expect(saved.statusCode).toBe(400);
-    expect(saved.body).toContain('Live trading supports Lighter markets only.');
+  it('starts Live only with a chosen, switched-on account for every exchange of the run', async () => {
+    process.env.PSR_LIVE_ENABLED = '1';
+    const { addLighter, launch } = await setup();
+    const main = await addLighter('Main', 1); // a Lighter account; no Hyperliquid one
+    const both = [{ venue: 'Lighter', market: 'SOL' }, { venue: 'Hyperliquid', market: 'SOL' }];
+    const started = await launch({ ...liveSettings, tracks: both, live: { ...live, accounts: { lighter: main } } });
+    expect(started.statusCode, started.body).not.toBe(201);
+    expect(started.body).toContain('Choose the Hyperliquid account for this LIVE run');
+    const unnamed = await launch({ ...liveSettings, live });
+    expect(unnamed.body).toContain('Choose the Lighter account for this LIVE run');
   });
 
-  it('is off until a Lighter account is connected', async () => {
-    const { app, start } = await setup();
+  it('is off until an account is added', async () => {
+    const { app, launch } = await setup();
     const capabilities = await app.inject({ method: 'GET', url: '/api/paper/capabilities' });
     expect(capabilities.json().liveTrading).toBe(false);
-    const started = await start();
+    const started = await launch(liveSettings);
     expect(started.statusCode).toBe(422);
     expect(started.json().error).toBe('Live trading is not enabled on this engine.');
   });
 
-  it.skipIf(!existsSync(python))('hands the limits to the engine, labels the run and closes it on Stop', async () => {
+  it.skipIf(!existsSync(python))('hands the account and limits to the engine, keeps one account in one run, closes on Stop', async () => {
     process.env.PSR_LIVE_ENABLED = '1';
-    let child: ChildProcessWithoutNullStreams | null = null;
-    let handed: Record<string, unknown> | null = null;
-    const { app, runtimeDir, start } = await setup((configPath) => {
+    const children: ChildProcessWithoutNullStreams[] = [];
+    const handed: Array<Record<string, unknown>> = [];
+    const { app, runtimeDir, liveSecretsDir, addLighter, launch } = await setup((configPath) => {
       const config = JSON.parse(readFileSync(configPath, 'utf8'));
-      handed = config.live;
+      handed.push(config.live);
       // Offline: the same Live code path against the stand-in exchange.
       const offline = `${configPath}.offline.json`;
       writeFileSync(offline, JSON.stringify({ ...config, mode: 'offline', live: { ...config.live, exchange: 'sandbox' } }));
-      child = spawn(python, [path.join(root, 'apps/nautilus-paper/runtime.py'), '--config', offline], { stdio: ['pipe', 'pipe', 'pipe'] });
+      const child = spawn(python, [path.join(root, 'apps/nautilus-paper/runtime.py'), '--config', offline], { stdio: ['pipe', 'pipe', 'pipe'] });
+      children.push(child);
       return child;
     });
+    const main = await addLighter('Main', 1);
+    const sub = await addLighter('Sub', 2);
     const capabilities = await app.inject({ method: 'GET', url: '/api/paper/capabilities' });
-    expect(capabilities.json().liveTrading).toBe(true);
-    const started = await start();
+    expect(capabilities.json()).toMatchObject({ liveTrading: true, liveExchanges: ['lighter'] });
+    const settings = { ...liveSettings, live: { ...live, accounts: { lighter: main } } };
+    const started = await launch(settings);
     expect(started.statusCode, started.body).toBe(201);
     const id = started.json().experiment.id as string;
     expect(started.json().experiment.live).toBe(true);
     const runDir = path.join(runtimeDir, id);
     await until('clean Live start', () => events(runDir).some(e => e.type === 'event'
-      && String(e.message).startsWith('LIVE run on Lighter mainnet: account clean')), 30_000);
-    expect(handed).toEqual({ exchange: 'lighter', dailyLossLimitPercent: '10', maxLeverage: '2', exchangeStopPercent: '0.5',
-      exchangeStopFrom: 'strategy_stop', maxSlippagePercent: '3', maxPositionUsdc: '13', minimumOrderSize: true, stateFile: path.join(runtimeDir, 'live-daily-reference.json') });
+      && String(e.message).startsWith('LIVE run on Lighter mainnet (account "Main"): account clean')), 30_000);
+    expect(handed[0]).toEqual({ exchange: 'real',
+      accounts: { lighter: { id: main, name: 'Main', file: path.join(liveSecretsDir, 'accounts', `${main}.env`) } },
+      dailyLossLimitPercent: '10', maxLeverage: '2', exchangeStopPercent: '0.5',
+      exchangeStopFrom: 'strategy_stop', maxSlippagePercent: '3', maxPositionUsdc: '13', minimumOrderSize: true,
+      stateFile: path.join(runtimeDir, 'live-daily-reference.json') });
+    expect(JSON.stringify(handed[0])).not.toContain('ab'.repeat(20)); // the key itself never goes into a config
     const listed = await app.inject({ method: 'GET', url: '/api/paper-experiments' });
     expect(listed.json().experiments[0].live).toBe(true);
+    const accountsNow = async () => (await app.inject({ method: 'GET', url: '/api/live/accounts' })).json().accounts
+      .map((account: { name: string; runId: string | null }) => [account.name, account.runId]);
+    expect(await accountsNow()).toEqual([['Main', id], ['Sub', null]]);
 
-    // One Live run at a time: a second one would share the Lighter account and API key.
-    expect((await app.inject({ method: 'GET', url: '/api/paper/capabilities' })).json().liveActive).toBe(true);
-    const second = await start();
+    // One account trades in one run at a time; another account starts its own Live run.
+    const second = await launch(settings);
     expect(second.statusCode).toBe(409);
-    expect(second.json().error).toBe('A LIVE run is already active. Stop it before starting another LIVE run.');
+    expect(second.json().error).toBe('The account "Main" is trading in another LIVE run. Choose another account or stop that run first.');
+    const other = await launch({ ...liveSettings, live: { ...live, accounts: { lighter: sub } } });
+    expect(other.statusCode, other.body).toBe(201);
+    const otherId = other.json().experiment.id as string;
+    expect(await accountsNow()).toEqual([['Main', id], ['Sub', otherId]]);
 
-    const stopped = await app.inject({ method: 'POST', url: `/api/paper-experiments/${id}/stop` });
-    expect(stopped.statusCode, stopped.body).toBe(200);
-    expect((await app.inject({ method: 'GET', url: '/api/paper/capabilities' })).json().liveActive).toBe(false);
+    for (const run of [otherId, id]) {
+      const stopped = await app.inject({ method: 'POST', url: `/api/paper-experiments/${run}/stop` });
+      expect(stopped.statusCode, stopped.body).toBe(200);
+    }
+    expect(await accountsNow()).toEqual([['Main', null], ['Sub', null]]);
     const final = (await app.inject({ method: 'GET', url: `/api/paper-experiments/${id}` })).json().experiment;
     expect(final.reason).toBe('Stopped by user. LIVE: every position of this run is closed on Lighter');
     expect(events(runDir).filter(e => e.type === 'failure')).toEqual([]);
     expect(events(runDir).some(e => e.type === 'phase' && e.stage === 'stopping'
-      && String(e.message).includes('LIVE: closing every position on Lighter at market'))).toBe(true);
-  }, 90_000);
+      && String(e.message).includes('LIVE: closing every position of this run at market'))).toBe(true);
+  }, 120_000);
 });

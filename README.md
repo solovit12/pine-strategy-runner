@@ -27,7 +27,7 @@ Pine strategy ──► Backtest ──► Paper ──► LIVE
 5. [The strategy editor and the library](#the-strategy-editor-and-the-library)
 6. [Backtest](#backtest)
 7. [Paper trading](#paper-trading)
-8. [Paper Runs: watching a run](#paper-runs-watching-a-run)
+8. [Runs: watching a run](#runs-watching-a-run)
 9. [Accounts: connecting exchanges for LIVE](#accounts-connecting-exchanges-for-live)
 10. [LIVE trading (real money)](#live-trading-real-money)
 11. [Your keys and your safety](#your-keys-and-your-safety)
@@ -126,7 +126,7 @@ it. This matters: the app has no login.
    every trade appear below.
 4. **Paper tab.** Choose the timeframe, a starting balance per exchange, the order size and the
    markets — you can type several at once: `BTC, ETH SOL`. Press **Start Paper**.
-5. **Paper Runs** (top menu) shows the run: open positions, balances, profit and loss, events and
+5. **Runs** (top menu) shows the run: open positions, balances, profit and loss, events and
    every virtual trade. The run keeps going after you close the browser.
 
 A backtest before Paper is optional.
@@ -207,9 +207,9 @@ the form warns about this.
 
 Up to **six runs** (Paper and LIVE together) work at the same time.
 
-## Paper Runs: watching a run
+## Runs: watching a run
 
-The **Paper Runs** page lists every run (running and finished). Open one to see:
+The **Runs** page (top menu) lists every run, Paper and LIVE, running and finished, with each exchange's **Total PnL** right after the status. Open one to see:
 
 - **Status** and the run's rules (timeframe, markets, balances, order size, fees, LIVE limits).
 - **Open positions** per exchange: size, average entry, mark price, unrealized PnL, leverage; the
@@ -479,7 +479,7 @@ published as `ghcr.io/solovit12/pine-strategy-runner`.
 
 | Path | What it is |
 |---|---|
-| `apps/web` | React UI: editor, Backtest and Paper tabs, Paper Runs, Accounts. |
+| `apps/web` | React UI: editor, Backtest and Paper tabs, Runs, Accounts. |
 | `apps/api` | Fastify server: pages, library, backtests, Paper/LIVE control, accounts. |
 | `apps/api/src/paper-execution` | Run control, the Nautilus process owner, the durable run journal. |
 | `apps/nautilus-paper` | Python execution engine on Nautilus Trader (Paper and LIVE), its tests and the pinned build recipe. |

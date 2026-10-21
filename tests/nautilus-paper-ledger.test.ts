@@ -6,7 +6,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import {
-  NautilusPaperLedger, readNautilusPaperSnapshot, reconcileNautilusPaperOutbox,
+  NautilusPaperLedger, readNautilusPaperLedgerSnapshot, readNautilusPaperSnapshot, reconcileNautilusPaperOutbox,
 } from '../apps/api/src/paper-execution/nautilus-paper-ledger.js';
 import { readPaperExperimentActivityV1 } from '../apps/api/src/paper-execution/paper-experiment-activity.js';
 import { PaperExperimentStoreV1 } from '../apps/api/src/paper-execution/paper-experiment-store.js';
@@ -378,6 +378,25 @@ describe('Nautilus Paper durable ledger', () => {
     expect(result).toMatchObject({ coverage: 'durable_journal', totalFills: 2 });
     expect(result.fills.map((row) => row.id)).toEqual(['child-fill-2', 'child-fill-1']);
     expect(result.events.some((event) => event.message.includes('Recovered 1 durable Nautilus event'))).toBe(true);
+  });
+
+  it('reads the ledger snapshot for lists without replaying the outbox; the full read replays it', () => {
+    const { directory, detail, snapshot } = fixture();
+    const first = { ...envelope(detail.id, 1), type: 'snapshot', stage: 'running', accounts: accounts() };
+    const second = { ...envelope(detail.id, 2), type: 'snapshot', stage: 'stopping',
+      accounts: accounts().map((account) => ({ ...account, cashBalance: '4990' })) };
+    const ledger = new NautilusPaperLedger(directory, snapshot);
+    ledger.append({ ...first, sourceSeq: 1 });
+    const inLedger = ledger.snapshot()!;
+    ledger.close();
+    outbox(directory, [first, second]);
+    childFiles(directory, detail.id, 2_147_483_647);
+    const terminal = { ...detail, status: 'interrupted' as const };
+    expect(readNautilusPaperLedgerSnapshot(terminal, directory)).toEqual(inLedger);
+    expect(readNautilusPaperLedgerSnapshot(terminal, directory)).toEqual(inLedger);
+    expect(readNautilusPaperSnapshot(terminal, directory)!.accounts.map((account) => account.cashBalance))
+      .toEqual(['4990', '4990']);
+    expect(readNautilusPaperLedgerSnapshot(terminal, directory)!.stage).toBe('stopping');
   });
 
   it('does not recover while the child may still be running', () => {

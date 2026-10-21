@@ -261,6 +261,8 @@ tbody tr:hover { background: #141a1c; }
 .paper-input-suffix { display: grid; grid-template-columns: minmax(0, 1fr) auto; border: 1px solid #38454a; background: #0d1214; }
 .paper-input-suffix:focus-within { border-color: var(--green); }
 .paper-input-suffix input { width: 100%; min-height: 41px; padding: 7px 10px; border: 0; outline: none; color: #e4ebed; background: transparent; }
+.paper-input-suffix input:disabled { color: #9fb0b6; cursor: not-allowed; }
+.paper-input-suffix:has(input:disabled) { background: #0d1214; opacity: .8; }
 .paper-input-suffix > span { min-width: 54px; padding: 9px 10px; display: grid; place-items: center; border-left: 1px solid #38454a; color: #9ba9ae; font: 12px/1.3 "Cascadia Code", Consolas, monospace; }
 .paper-card-title { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .paper-card-title h2 { margin-top: 5px; }
@@ -542,3 +544,6 @@ tbody tr:hover { background: #141a1c; }
 @media (max-width: 640px) {
   .live-account-list { grid-template-columns: 1fr; }
 }
+.paper-history-pnl { white-space: nowrap; font-size: 13px; }
+.paper-history-pnl div + div { margin-top: 3px; }
+.paper-history-pnl span { color: #84949a; }

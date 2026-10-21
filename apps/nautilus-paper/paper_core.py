@@ -39,6 +39,9 @@ ENTRY_MAX_WAIT_MS = 2_000
 # A market is current while its venue socket keeps delivering recent messages.
 DEFAULT_VENUE_SOURCE_AGE_MS = 2_000
 DEFAULT_TRACK_QUIET_MS = 30_000
+# A venue source time this far ahead of our clock is clock skew, not a message
+# from the future (Tokyo lagged Lighter by ~6-10 ms on 2026-10-20).
+VENUE_CLOCK_SKEW_MS = 50
 # A book first seen after arrival may stand in for the arrival-time book only
 # within one Hyperliquid snapshot period after the touch; later is look-ahead.
 ENTRY_BOOK_WINDOW_MS = 600
@@ -249,7 +252,7 @@ class TrackStrategy(Strategy):
                 reasons.append("venue_delivery_future")
             elif venue_delivery > self.run_config["maxQuoteAgeMs"]:
                 reasons.append("venue_delivery_stale")
-            if venue_source < 0:
+            if venue_source < -VENUE_CLOCK_SKEW_MS:
                 reasons.append("venue_source_future")
             elif venue_source > self.run_config["maxVenueSourceAgeMs"]:
                 reasons.append("venue_source_stale")

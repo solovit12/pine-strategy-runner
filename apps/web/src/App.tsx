@@ -712,7 +712,7 @@ export function App() {
         </div>
         <nav className="top-nav" aria-label="Main navigation">
           <button type="button" className={page !== 'paper-runs' && page !== 'accounts' ? 'active' : ''} onClick={() => navigate(page === 'paper-runs' || page === 'accounts' ? 'backtest' : page)}>Strategy</button>
-          <button type="button" className={page === 'paper-runs' ? 'active' : ''} onClick={() => navigate('paper-runs')}>Paper Runs</button>
+          <button type="button" className={page === 'paper-runs' ? 'active' : ''} onClick={() => navigate('paper-runs')}>Runs</button>
           {liveTradingAvailable(EDITION) && <button type="button" className={page === 'accounts' ? 'active' : ''} onClick={() => navigate('accounts')}>Accounts</button>}
         </nav>
         <div className="top-status">

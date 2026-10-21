@@ -7,7 +7,7 @@ import type {
   StrategySummary,
 } from '../../../../packages/shared/src/strategy-catalog-contracts';
 import type {
-  CreateLiveAccountRequest, LiveAccountView, LiveAccountsView, LiveConnectionCheck, PaperExperimentActivity,
+  CreateLiveAccountRequest, LiveAccountFees, LiveAccountView, LiveAccountsView, LiveConnectionCheck, PaperExperimentActivity,
   PaperExperimentCapabilities, PaperExperimentDetail, PaperExperimentSummary, StartPaperExperimentRequest, UpdateLiveAccountRequest,
 } from '../../../../packages/shared/src/paper-experiment-contracts';
 
@@ -214,6 +214,10 @@ export async function updateLiveAccount(id: string, input: UpdateLiveAccountRequ
 
 export async function removeLiveAccount(id: string): Promise<LiveAccountsView> {
   return parse<LiveAccountsView>(await fetch(`/api/live/accounts/${encodeURIComponent(id)}`, { method: 'DELETE' }));
+}
+
+export async function loadLiveAccountFees(id: string, signal?: AbortSignal): Promise<LiveAccountFees> {
+  return (await parse<{ fees: LiveAccountFees }>(await fetch(`/api/live/accounts/${encodeURIComponent(id)}/fees`, { signal }))).fees;
 }
 
 export async function checkLiveAccount(id: string): Promise<LiveConnectionCheck> {

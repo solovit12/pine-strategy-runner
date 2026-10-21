@@ -3,8 +3,10 @@ import path from 'node:path';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 
 import {
-  CreateLiveAccountSchema, LIVE_ACCOUNT_ID_PATTERN, UpdateLiveAccountSchema, type LiveConnectionCheck, type LiveExchange,
+  CreateLiveAccountSchema, LIVE_ACCOUNT_ID_PATTERN, UpdateLiveAccountSchema, type LiveAccountFees, type LiveAccountView,
+  type LiveConnectionCheck, type LiveExchange,
 } from '../../../packages/shared/src/paper-experiment-contracts.js';
+import { createLiveFeeReader } from './live-fees.js';
 import { LiveSettingsError, type LiveSettingsStore } from './live-settings.js';
 import { isCrossOriginPaperWrite } from './paper-routes.js';
 
@@ -17,6 +19,8 @@ export interface LiveRouteDependencies {
   readonly projectRoot: string;
   /** Tests replace the connection check. */
   readonly runCheck?: (env: Record<string, string>, exchange: LiveExchange) => Promise<LiveConnectionCheck>;
+  /** Tests replace the fee reading. */
+  readonly readFees?: (account: LiveAccountView) => Promise<LiveAccountFees>;
 }
 
 /** Runs apps/nautilus-paper/live_check.py: connects with the saved key, reads the account, places nothing. */
@@ -65,6 +69,7 @@ export function registerLiveRoutes(app: FastifyInstance, dependencies: LiveRoute
   const { store } = dependencies;
   const runCheck = dependencies.runCheck
     ?? ((env: Record<string, string>, exchange: LiveExchange) => runLiveCheck(dependencies.nautilusPython, dependencies.projectRoot, env, exchange));
+  const readFees = dependencies.readFees ?? createLiveFeeReader();
   let checking = false;
   const forbidden = { kind: 'PAPER_ORIGIN_FORBIDDEN', error: 'Live accounts require a same-origin request.' };
   const refuse = (reply: FastifyReply, error: unknown) => {
@@ -123,6 +128,20 @@ export function registerLiveRoutes(app: FastifyInstance, dependencies: LiveRoute
       store.remove(id);
       return store.view();
     } catch (error) { return refuse(reply, error); }
+  });
+
+  // The account's real fees on its exchange (public data, no key): LIVE fee fields use them.
+  app.get('/api/live/accounts/:id/fees', async (request, reply) => {
+    reply.header('Cache-Control', 'no-store');
+    const id = idOf(request);
+    const account = id ? store.account(id) : null;
+    if (!account) return reply.code(404).send({ kind: 'LIVE_ACCOUNT_NOT_FOUND', error: 'This account no longer exists.' });
+    try {
+      return { fees: await readFees(account) };
+    } catch (error) {
+      return reply.code(502).send({ kind: 'LIVE_FEES_UNAVAILABLE',
+        error: `Could not read the account's fees: ${error instanceof Error ? error.message : String(error)}` });
+    }
   });
 
   app.post('/api/live/accounts/:id/check', async (request, reply) => {

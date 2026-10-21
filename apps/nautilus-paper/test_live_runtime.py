@@ -788,7 +788,8 @@ def hyperliquid_refusals_and_account():
         unified.read_account()
     finally:
         live_venues.hyperliquid_info = original
-    assert account["equity"] == Decimal("100.0") and account["cash"] == Decimal("99.5"), account
+    # Its spot USDC already includes the open PnL (+1.25 SOL, -0.75 NVDA): equity 99.5, cash 99.0.
+    assert account["equity"] == Decimal("99.5") and account["cash"] == Decimal("99.0"), account
     assert len(account["positions"]) == 2, account
     assert sum(body["type"] == "userAbstraction" for body in asked) == 2  # once per venue, not per read
     print("hyperliquid refusals and account PASS", flush=True)

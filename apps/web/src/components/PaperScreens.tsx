@@ -9,14 +9,15 @@ import {
 } from '../../../../packages/shared/src/strategy-catalog-contracts';
 import {
   liveAccountBusyMessage, PineLivePaperLaunchSettingsV1Schema, PythonLivePaperLaunchSettingsV1Schema,
-  type LiveAccountView, type LiveExchange,
+  type LiveAccountFees, type LiveAccountView, type LiveExchange,
 } from '../../../../packages/shared/src/paper-experiment-contracts';
 import {
-  ApiResponseError, createPaperExperiment, loadLiveAccounts, loadPaperCapabilities, loadPaperMarkets, loadPythonStrategies, loadStrategy, loadVenueVolumes,
+  ApiResponseError, createPaperExperiment, loadLiveAccountFees, loadLiveAccounts, loadPaperCapabilities, loadPaperMarkets, loadPythonStrategies, loadStrategy, loadVenueVolumes,
   type PaperCapabilities, type PythonStrategyInfo, type PythonStrategyParam,
 } from '../lib/api';
 import { findSavedPythonStrategy } from '../lib/python-strategy-library';
 import { InfoTooltip } from './TranslatedText';
+import { ZodError } from 'zod';
 import { accountIdentity, EXCHANGE_NAMES } from './LiveSettings';
 import { EDITION, liveTradingAvailable, pythonStrategiesAvailable, type Edition } from '../../../../packages/shared/src/edition';
 
@@ -128,6 +129,8 @@ function parseNumber(value: string): number {
 }
 
 function errorMessage(reason: unknown): string {
+  // A settings check names its rule: show that sentence, not the checker's raw report.
+  if (reason instanceof ZodError) return reason.issues.map((issue) => issue.message).join(' ');
   return reason instanceof Error ? reason.message : String(reason);
 }
 
@@ -382,6 +385,8 @@ export function PaperSetupPreview({ source, fromBacktest, fromEditor = fromBackt
   // The LIVE account each exchange trades (Accounts page); a saved draft brings its choice back.
   const [liveAccounts, setLiveAccounts] = useState<LiveAccountView[] | null>(null);
   const [accountChoice, setAccountChoice] = useState<Partial<Record<LiveExchange, string>>>(() => ({ ...(initial?.live?.accounts ?? {}) }));
+  // LIVE: each chosen account's real fees on its exchange (or why they could not be read).
+  const [liveFees, setLiveFees] = useState<Partial<Record<LiveExchange, LiveAccountFees | string>>>({});
   const [launchError, setLaunchError] = useState('');
   const [launching, setLaunching] = useState(false);
   const launchInFlight = useRef(false);
@@ -509,6 +514,25 @@ export function PaperSetupPreview({ source, fromBacktest, fromEditor = fromBackt
       ?? usable.find((account) => !account.runId) ?? usable[0];
     return chosen ? [[exchange, chosen.id]] : [];
   }));
+  const chosenKey = live ? JSON.stringify(chosenAccounts) : '';
+  useEffect(() => {
+    if (!chosenKey) return;
+    const controller = new AbortController();
+    const chosen = JSON.parse(chosenKey) as Partial<Record<LiveExchange, string>>;
+    for (const [exchange, id] of Object.entries(chosen) as Array<[LiveExchange, string]>) {
+      loadLiveAccountFees(id, controller.signal).then((fees) => {
+        setLiveFees((current) => ({ ...current, [exchange]: fees }));
+        // The fee fields show the account's own rates while LIVE is chosen.
+        setFees((current) => ({ ...current, ...(exchange === 'hyperliquid'
+          ? { hyperliquidMakerFeePercent: String(fees.makerPercent), hyperliquidTakerFeePercent: String(fees.takerPercent) }
+          : { lighterMakerFeePercent: String(fees.makerPercent), lighterTakerFeePercent: String(fees.takerPercent) }) }));
+      }).catch((reason) => {
+        if (!controller.signal.aborted) setLiveFees((current) => ({ ...current, [exchange]: errorMessage(reason) }));
+      });
+    }
+    return () => controller.abort();
+  }, [chosenKey]);
+  const feesLocked = (exchange: LiveExchange) => live && typeof liveFees[exchange] === 'object';
   const draft: LiveSettings = useMemo(() => ({
     ...(kind === 'python'
       ? { accountModel: 'python_live_v1' as const, strategyRef: pythonRef, params: pythonParams }
@@ -601,10 +625,12 @@ export function PaperSetupPreview({ source, fromBacktest, fromEditor = fromBackt
     }
   };
 
-  const feeField = (key: keyof typeof fees, label: string) => (
-    <label key={key}><span>{label}</span><div className="paper-input-suffix"><input type="text" inputMode="decimal" value={fees[key]}
-      aria-label={label} onChange={(event) => setFees((current) => ({ ...current, [key]: event.target.value }))} /><span>%</span></div></label>
-  );
+  const feeField = (key: keyof typeof fees, label: string) => {
+    const locked = feesLocked(key.startsWith('hyperliquid') ? 'hyperliquid' : 'lighter');
+    return <label key={key}><span>{label}</span><div className="paper-input-suffix"><input type="text" inputMode="decimal" value={fees[key]}
+      aria-label={label} disabled={locked} title={locked ? 'Your account\'s fee on the exchange' : undefined}
+      onChange={(event) => setFees((current) => ({ ...current, [key]: event.target.value }))} /><span>%</span></div></label>;
+  };
 
   return (
     <section className={embedded ? 'paper-page paper-tab' : 'paper-page'} aria-labelledby={embedded ? undefined : 'paper-setup-title'} aria-label={embedded ? 'Paper setup' : undefined}>
@@ -746,8 +772,14 @@ export function PaperSetupPreview({ source, fromBacktest, fromEditor = fromBackt
             {(!live || liveVenues.includes('Lighter')) && feeField('lighterMakerFeePercent', 'Lighter maker fee')}
             {(!live || liveVenues.includes('Lighter')) && feeField('lighterTakerFeePercent', 'Lighter taker fee')}
           </div>
+          {live && runExchanges.map((exchange) => {
+            const info = liveFees[exchange];
+            return info === undefined ? null : typeof info === 'object'
+              ? <p key={exchange} className="paper-card-footnote">{EXCHANGE_NAMES[exchange]} fees: {info.source}</p>
+              : <p key={exchange} className="paper-launch-error" role="status">{EXCHANGE_NAMES[exchange]} fees: {info} The fields stay editable.</p>;
+          })}
           <p className="paper-card-footnote">{live
-            ? 'Each exchange charges its own fees on real orders; these fields only feed a Pine strategy\'s commission.'
+            ? 'In LIVE the fee fields show each account\'s own fees on its exchange; the exchange charges them on real orders, and a Pine strategy uses them for its commission.'
             : 'Defaults are public base-tier fees. Funding payments are not included.'}</p>
         </section>
       </div>
@@ -804,7 +836,7 @@ export function PaperSetupPreview({ source, fromBacktest, fromEditor = fromBackt
           {launchError && <p id="paper-launch-error" className="paper-launch-error" role="alert"><AlertTriangle size={16} />{launchError}</p>}
         </div>
         <div className="paper-action-buttons">
-          <button type="button" className="paper-text-button" onClick={onRuns}>View Paper Runs <ArrowRight size={15} /></button>
+          <button type="button" className="paper-text-button" onClick={onRuns}>View Runs <ArrowRight size={15} /></button>
           <button type="button" className={live ? 'run-button run-button-live' : 'run-button'} aria-describedby={launchError ? 'paper-launch-error' : undefined}
             disabled={Boolean(launchBlocker) || launching || catalogBusy} onClick={() => { void launchPaper(); }}>{launching ? 'Starting…' : live ? 'Start LIVE' : 'Start Paper'}</button>
         </div>

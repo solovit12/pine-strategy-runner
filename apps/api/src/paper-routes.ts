@@ -1,7 +1,10 @@
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { StartPaperExperimentSchema } from '../../../packages/shared/src/paper-experiment-contracts.js';
+import {
+  StartPaperExperimentSchema, type PaperExperimentDetail, type PaperExperimentSummary, type VenuePnl,
+} from '../../../packages/shared/src/paper-experiment-contracts.js';
+import { venueTotalPnl } from '../../../packages/shared/src/paper-pnl.js';
 import type { StrategyCatalogV1 } from './strategy-catalog.js';
 import {
   PaperExperimentControllerError, type PaperExperimentControllerV1, type PaperExperimentRuntimeFactory,
@@ -9,7 +12,7 @@ import {
 import { listPythonStrategies } from './paper-execution/pine-paper-factory.js';
 import { fetchVenueCatalog, type PaperVenueKey, type VenueMarket } from './paper-execution/venue-markets.js';
 import { PaperExperimentActivityQueryError, readPaperExperimentActivityV1 } from './paper-execution/paper-experiment-activity.js';
-import { readNautilusPaperSnapshot } from './paper-execution/nautilus-paper-ledger.js';
+import { readNautilusPaperLedgerSnapshot, readNautilusPaperSnapshot } from './paper-execution/nautilus-paper-ledger.js';
 
 export function isCrossOriginPaperWrite(request: FastifyRequest): boolean {
   if (request.headers['sec-fetch-site'] === 'cross-site') return true;
@@ -89,9 +92,44 @@ export function registerPaperRoutes(app: FastifyInstance, dependencies: PaperRou
     return paperExperiments.capabilities();
   });
 
+  /**
+   * A run's detail with its last account snapshot: the live owner's, or the one already in the run
+   * journal after it ended. The list never replays outboxes (that blocks the engine for minutes on a
+   * restart); a run's own page does, and refreshes the list total below.
+   */
+  const withRuntime = (id: string): PaperExperimentDetail | null => {
+    const experiment = paperExperiments.get(id);
+    if (!experiment || experiment.runtime || !paperRunsDir) return experiment;
+    const directory = path.join(paperRunsDir, experiment.id);
+    if (!existsSync(path.join(directory, 'nautilus.sqlite'))) return experiment;
+    const runtime = readNautilusPaperLedgerSnapshot(experiment, directory);
+    return runtime ? { ...experiment, runtime } : experiment;
+  };
+  // An ended run's totals no longer change: read its journal once.
+  const endedPnl = new Map<string, readonly VenuePnl[]>();
+  const endedKey = (run: { readonly id: string; readonly endedAt?: string | null }) => `${run.id}:${run.endedAt}`;
+  const pnlOf = (summary: PaperExperimentSummary): readonly VenuePnl[] | undefined => {
+    const ended = Boolean(summary.endedAt);
+    const key = endedKey(summary);
+    if (ended && endedPnl.has(key)) return endedPnl.get(key);
+    let pnl: readonly VenuePnl[] = [];
+    try {
+      const detail = withRuntime(summary.id);
+      pnl = detail ? venueTotalPnl(detail) : [];
+    } catch (error) {
+      app.log.warn({ err: error, experimentId: summary.id }, 'Run totals unavailable');
+      return undefined;
+    }
+    if (ended) endedPnl.set(key, pnl);
+    return pnl.length ? pnl : undefined;
+  };
+
   app.get('/api/paper-experiments', async (_request, reply) => {
     reply.header('Cache-Control', 'no-store');
-    return { experiments: paperExperiments.list() };
+    return { experiments: paperExperiments.list().map((summary) => {
+      const pnl = pnlOf(summary);
+      return pnl?.length ? { ...summary, pnl } : summary;
+    }) };
   });
 
   app.get<{ Params: { id: string } }>('/api/paper-experiments/:id', async (request, reply) => {
@@ -102,7 +140,10 @@ export function registerPaperRoutes(app: FastifyInstance, dependencies: PaperRou
       if (existsSync(path.join(directory, 'nautilus.sqlite'))) {
         try {
           const runtime = readNautilusPaperSnapshot(experiment, directory);
-          return { experiment: runtime ? { ...experiment, runtime } : experiment };
+          const detail = runtime ? { ...experiment, runtime } : experiment;
+          // The replay may have recovered events the list total has not seen.
+          if (experiment.endedAt) endedPnl.set(endedKey(experiment), venueTotalPnl(detail));
+          return { experiment: detail };
         } catch (error) {
           app.log.warn({ err: error, experimentId: experiment.id }, 'Nautilus audit snapshot unavailable');
           // Control status remains usable; activity reports partial coverage rather than invented zero fills.

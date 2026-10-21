@@ -32,6 +32,10 @@ async function routes(store: LiveSettingsStore) {
       checks.push({ ...env, exchange });
       return { ok: true, balance: '99.5', openPositions: 0, openOrders: 0, error: null };
     },
+    readFees: async (account) => {
+      if (account.exchange === 'lighter') throw new Error('Lighter answered 503.');
+      return { exchange: account.exchange, makerPercent: 0.015, takerPercent: 0.045, source: 'test' };
+    },
   });
   await app.ready();
   return { app, checks };
@@ -138,6 +142,12 @@ describe('Live accounts', () => {
       { HYPERLIQUID_PK: HL_KEY, HYPERLIQUID_ACCOUNT_ADDRESS: HL_ADDRESS.toLowerCase(), exchange: 'hyperliquid' },
     ]);
     expect((await app.inject({ method: 'POST', url: '/api/live/accounts/missing-account/check' })).statusCode).toBe(404);
+    // The account's real fees for the LIVE form (public data, never a key).
+    expect((await app.inject({ method: 'GET', url: `/api/live/accounts/${hl.id}/fees` })).json().fees)
+      .toEqual({ exchange: 'hyperliquid', makerPercent: 0.015, takerPercent: 0.045, source: 'test' });
+    const unavailable = await app.inject({ method: 'GET', url: `/api/live/accounts/${main.id}/fees` });
+    expect(unavailable.statusCode).toBe(502);
+    expect(unavailable.json().error).toBe("Could not read the account's fees: Lighter answered 503.");
     expect(store.liveExchanges()).toEqual(['lighter', 'hyperliquid']);
     expect(() => store.accountForRun(hl.id, 'lighter')).toThrow('is not a Lighter account');
     expect(() => store.accountForRun(undefined, 'hyperliquid')).toThrow('Choose the Hyperliquid account');

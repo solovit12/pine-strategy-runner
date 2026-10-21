@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import {
+  MAX_MARKETS_PER_RUN,
   type PaperStrategySettings,
   PineLivePaperSettingsV1Schema,
   PineLiveTrackSchema,
@@ -16,7 +17,8 @@ export const VenueSharedPaperLaunchSettingsV2Schema = VenueSharedPaperStrategySe
   lighterTakerExitFeePercent: z.number().finite().min(0).max(100),
 });
 
-const launchTracks = z.array(PineLiveTrackSchema).min(1, 'Choose at least one market.').max(20);
+const launchTracks = z.array(PineLiveTrackSchema).min(1, 'Choose at least one market.')
+  .max(MAX_MARKETS_PER_RUN, `Choose no more than ${MAX_MARKETS_PER_RUN} markets (${MAX_MARKETS_PER_RUN / 2} per exchange).`);
 
 /** Generic Pine Paper launch: every fee must be explicit. */
 export const PineLivePaperLaunchSettingsV1Schema = PineLivePaperSettingsV1Schema.safeExtend({
@@ -139,6 +141,15 @@ export interface LiveAccountsView {
   readonly disabledByServer: boolean;
 }
 
+/** The fees an exchange charges one Live account (from its public API); a LIVE run's fee fields show them. */
+export interface LiveAccountFees {
+  readonly exchange: LiveExchange;
+  readonly makerPercent: number;
+  readonly takerPercent: number;
+  /** Where the values come from, for the form. */
+  readonly source: string;
+}
+
 /** Read-only connection check of a saved Live account (no orders). */
 export interface LiveConnectionCheck {
   readonly ok: boolean;
@@ -216,8 +227,17 @@ export interface PaperExperimentSummary {
   readonly markets?: readonly PaperExperimentTrack['market'][];
   readonly timeframe?: PaperStrategySettings['timeframe'];
   readonly capitalPerVenue?: number | null;
-  /** True for a Live run (real orders on Lighter). */
+  /** True for a Live run (real orders on the run's exchanges). */
   readonly live?: boolean;
+  /** Total PnL per exchange at the last account snapshot (the runs list); absent when not reported. */
+  readonly pnl?: readonly VenuePnl[];
+}
+
+/** One exchange's total profit and loss in a run: USDC and percent of its start; null when not reported. */
+export interface VenuePnl {
+  readonly venue: 'Hyperliquid' | 'Lighter';
+  readonly total: number | null;
+  readonly percent: number | null;
 }
 
 export interface PaperExperimentDetail extends PaperExperimentSummary {

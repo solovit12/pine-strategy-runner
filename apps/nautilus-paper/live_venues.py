@@ -289,8 +289,8 @@ class HyperliquidVenue(LiveVenue):
                     pnl = Decimal(str(position.get("unrealizedPnl") or "0"))
                     upnl += pnl
                     positions[track_key("hyperliquid", str(position["coin"]))] = (size, pnl)
-        if self.spot_collateral():
-            equity += upnl  # the spot USDC balance holds realized PnL only
+        # A unified account's spot USDC already moves with the open positions' PnL (live 2026-10-20: spot
+        # 100.3997 = 100.2824 after closed trades and fees + 0.1174 open on ZEC and ZRO): it is the equity.
         account = {"equity": equity, "cash": equity - upnl, "positions": positions}
         with self._lock:
             self._account = (time.monotonic(), account)

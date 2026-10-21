@@ -674,6 +674,14 @@ export function readNautilusPaperSnapshot(detail: PaperExperimentDetail, directo
   if (detail.status === 'completed' || detail.status === 'interrupted') {
     reconcileNautilusPaperOutbox(detail, directory);
   }
+  return readNautilusPaperLedgerSnapshot(detail, directory);
+}
+
+/**
+ * The last snapshot already in the ledger, without replaying the child outbox. Replay re-reads and
+ * verifies the whole outbox (seconds per large run) and blocks the process, so lists use this.
+ */
+export function readNautilusPaperLedgerSnapshot(detail: PaperExperimentDetail, directory: string): PaperExperimentRuntimeView | null {
   const db = openReadOnly(directory, bindingFromDetail(detail));
   if (!db) return null;
   try { return latestSnapshot(db, bindingFromDetail(detail)); }

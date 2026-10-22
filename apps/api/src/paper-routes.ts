@@ -48,7 +48,9 @@ export function registerPaperRoutes(app: FastifyInstance, dependencies: PaperRou
   let pythonStrategyCache: { at: number; value: Awaited<ReturnType<typeof listPythonStrategies>> } | null = null;
   app.get('/api/python-strategies', async (_request, reply) => {
     reply.header('Cache-Control', 'no-store');
-    if (!paperRuntimeFactory || !pythonStrategies) return { strategies: [], errors: [], packsConfigured: strategyPacks.length };
+    if (!paperRuntimeFactory || !pythonStrategies || !strategyPacks.length) {
+      return { strategies: [], errors: [], packsConfigured: strategyPacks.length };
+    }
     try {
       if (!pythonStrategyCache || Date.now() - pythonStrategyCache.at > 15_000) {
         pythonStrategyCache = { at: Date.now(), value: await listPythonStrategies(nautilusPython, projectRoot, strategyPacks) };

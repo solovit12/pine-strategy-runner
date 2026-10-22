@@ -1,6 +1,6 @@
 import type { PaperExperimentRuntimeFactory } from './paper-experiment-controller.js';
 
-/** This edition has no built-in (native) strategies: Paper runs Pine strategies only. */
+/** This edition has no built-in (native) strategies: Paper runs Pine strategies and the user's own Python strategies. */
 export function createNativePaperFactory(_options: unknown): PaperExperimentRuntimeFactory | null {
   return null;
 }

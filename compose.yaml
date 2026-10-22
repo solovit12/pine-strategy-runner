@@ -7,8 +7,12 @@ services:
     image: ghcr.io/solovit12/pine-strategy-runner:latest
     ports:
       - "127.0.0.1:18788:8787"
+    environment:
+      # Your Python strategies: every .py file in ./my_strategies (README: Python strategies).
+      PSR_STRATEGY_PACKS: /strategies/my_strategies
     volumes:
       - psr-data:/data
+      - ./my_strategies:/strategies/my_strategies:ro
     init: true
     restart: unless-stopped
     # A stop closes every Paper run cleanly; their virtual accounts stay in the history.

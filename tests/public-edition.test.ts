@@ -22,14 +22,14 @@ const pythonSettings = {
 const directories: string[] = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map((directory) => rm(directory, { recursive: true, force: true }))); });
 
-describe('Pine-only public edition', () => {
-  it('this build knows its edition', () => {
+describe('public edition', () => {
+  it('runs the user\'s Python strategies in both editions', () => {
     expect(['full', 'public']).toContain(EDITION);
     expect(pythonStrategiesAvailable('full')).toBe(true);
-    expect(pythonStrategiesAvailable('public')).toBe(false);
+    expect(pythonStrategiesAvailable('public')).toBe(true);
   });
 
-  it('lists no Python strategies and refuses a saved Python strategy before any engine work', async () => {
+  it('lists nothing without a strategy folder and launches a saved Python strategy', async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), 'psr-public-edition-'));
     directories.push(root);
     const preflight = vi.fn(async () => undefined);
@@ -49,10 +49,8 @@ describe('Pine-only public edition', () => {
         strategyId: saved.json().strategy.id, version: 1,
         sourceSha256: createHash('sha256').update(pythonSource).digest('hex'),
         settings: pythonSettings, idempotencyKey: randomUUID() } });
-      expect(launch.statusCode, launch.body).toBe(422);
-      expect(launch.json()).toMatchObject({ kind: 'UNSUPPORTED_STRATEGY', error: 'This edition runs Pine strategies only.' });
-      expect(preflight).not.toHaveBeenCalled();
-      expect(start).not.toHaveBeenCalled();
+      expect(launch.statusCode, launch.body).toBe(201);
+      expect(preflight).toHaveBeenCalled();
     } finally { await app.close(); }
   });
 });

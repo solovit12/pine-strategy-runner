@@ -3,9 +3,12 @@ export type Edition = 'full' | 'public';
 
 export const EDITION: Edition = 'public';
 
-/** Python strategies (strategy packs and the SDK) ship in the full edition only. */
-export function pythonStrategiesAvailable(edition: Edition = EDITION): boolean {
-  return edition === 'full';
+/**
+ * Python strategies run in both editions: each user configures folders of their own strategy files
+ * (strategy packs, PSR_STRATEGY_PACKS); no pack ships with the service.
+ */
+export function pythonStrategiesAvailable(_edition: Edition = EDITION): boolean {
+  return true;
 }
 
 /** Live trading with real money ships in both editions; each user connects their own account. */

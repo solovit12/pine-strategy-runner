@@ -177,17 +177,16 @@ describe('generic Pine Paper setup', () => {
     expect(tab).toContain('Start Paper');
   });
 
-  it('keeps the public edition on Pine code: the type is locked and saved Python settings are not applied', () => {
+  it('offers Python strategies in the public edition and applies saved Python settings', () => {
     const python = { ...settings, accountModel: 'python_live_v1' as const, strategyRef: 'examples/ema_cross:EmaCross', params: { fast: 12 } };
     const saved = { ...savedStrategy, version: { ...savedStrategy.version, source: 'psr-python-strategy:examples/ema_cross:EmaCross',
       paperSettings: python } } as unknown as StrategyDetail;
     const setup = renderToStaticMarkup(createElement(PaperSetupPreview, {
       source: '', fromBacktest: false, strategies: [], savedStrategy: saved, catalogBusy: false, ...callbacks, edition: 'public',
     }));
-    expect(setup).toContain('aria-label="Strategy type" disabled=""');
-    expect(setup).toContain('<option value="pine" selected="">Pine code</option>');
-    expect(setup).not.toContain('Python');
-    expect(setup).not.toContain('Start saves this strategy and its settings in the library');
+    expect(setup).not.toContain('aria-label="Strategy type" disabled=""');
+    expect(setup).toContain('Python strategy');
+    expect(setup).toContain('Start saves this strategy and its settings in the library');
   });
 
   it('orders the market picker by match quality, then 24 h volume, and hides chosen markets', () => {

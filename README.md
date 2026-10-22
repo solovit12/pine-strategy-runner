@@ -27,18 +27,19 @@ Pine strategy ──► Backtest ──► Paper ──► LIVE
 5. [The strategy editor and the library](#the-strategy-editor-and-the-library)
 6. [Backtest](#backtest)
 7. [Paper trading](#paper-trading)
-8. [Runs: watching a run](#runs-watching-a-run)
-9. [Accounts: connecting exchanges for LIVE](#accounts-connecting-exchanges-for-live)
-10. [LIVE trading (real money)](#live-trading-real-money)
-11. [Your keys and your safety](#your-keys-and-your-safety)
-12. [Limits at a glance](#limits-at-a-glance)
-13. [What to expect: accuracy and differences from TradingView](#what-to-expect)
-14. [Update, stop, back up, remove](#update-stop-back-up-remove)
-15. [Running it on a server](#running-it-on-a-server)
-16. [Troubleshooting and FAQ](#troubleshooting-and-faq)
-17. [Build it yourself and develop](#build-it-yourself-and-develop)
-18. [How the code is organised](#how-the-code-is-organised)
-19. [License and disclaimer](#license-and-disclaimer)
+8. [Python strategies](#python-strategies)
+9. [Runs: watching a run](#runs-watching-a-run)
+10. [Accounts: connecting exchanges for LIVE](#accounts-connecting-exchanges-for-live)
+11. [LIVE trading (real money)](#live-trading-real-money)
+12. [Your keys and your safety](#your-keys-and-your-safety)
+13. [Limits at a glance](#limits-at-a-glance)
+14. [What to expect: accuracy and differences from TradingView](#what-to-expect)
+15. [Update, stop, back up, remove](#update-stop-back-up-remove)
+16. [Running it on a server](#running-it-on-a-server)
+17. [Troubleshooting and FAQ](#troubleshooting-and-faq)
+18. [Build it yourself and develop](#build-it-yourself-and-develop)
+19. [How the code is organised](#how-the-code-is-organised)
+20. [License and disclaimer](#license-and-disclaimer)
 
 ---
 
@@ -49,6 +50,7 @@ Pine strategy ──► Backtest ──► Paper ──► LIVE
 | **Backtest** | Your Pine strategy on Binance USDⓈ-M perpetual futures history, with stops, take-profits and limits checked on every minute inside each bar. Chart with trade markers, metrics and every trade. | none |
 | **Paper** | The same strategy running in real time on the live order books of Lighter and Hyperliquid (including Hyperliquid's stock, index and commodity markets such as `xyz:NVDA`), up to 15 markets per exchange. Orders fill against the real book with each exchange's fees and a realistic delay. | virtual balance |
 | **LIVE** | The same strategy placing real orders on your own Lighter and/or Hyperliquid account, with a daily loss limit, an account leverage limit, a stop resting on the exchange and a Stop button that closes everything. | your real money |
+| **Python strategies** | Your own Python classes for logic Pine cannot express: they react to every price change in Paper and LIVE (not in Backtest). | — |
 | **Accounts** | A page with your exchange accounts and their API keys. Each LIVE run picks one account per exchange; different accounts can trade LIVE side by side. | — |
 
 Runs on Windows, macOS and Linux with Docker Desktop (or Docker Engine on Linux).
@@ -183,6 +185,7 @@ executed against the live order book with virtual money.
 | Field | Meaning |
 |---|---|
 | Run mode | **Paper — virtual money** or **LIVE — real money** (see [LIVE](#live-trading-real-money)). |
+| Strategy type | **Pine code** (the editor or a saved strategy) or **Python strategy** (see [Python strategies](#python-strategies)). |
 | Timeframe | `1m`, `5m`, `15m`, `30m`, `1h`, `4h`, `1d`, on the exchange's own candles. |
 | Markets | Any USDC perpetual of Lighter and Hyperliquid, up to **15 per exchange** (30 per run). The list is ordered by 24 h volume. **Type or paste several at once**, separated by commas, spaces or semicolons (`BTC, ETH sol`): Enter or **Add all** adds every market found on that exchange and tells you what was not found, what was already chosen and what did not fit. **Add to both exchanges** adds a market to the other exchange too when it is listed there. |
 | Balance per exchange | The virtual account each exchange starts with (USDC). Markets of one exchange share its account. |
@@ -206,6 +209,135 @@ the form warns about this.
 - If one market's data stops, that market waits for a fresh order book while the others keep trading.
 
 Up to **six runs** (Paper and LIVE together) work at the same time.
+
+## Python strategies
+
+Besides Pine, **Paper and LIVE** run strategies written in Python. Choose Python when Pine is not
+enough: the strategy can react to **every price change** (not only to closed candles), see the best bid
+and ask, the market's public trades and their volume, and keep any state you like in ordinary Python
+code. Backtest runs Pine only, so test a Python strategy in Paper first.
+
+### Where your strategies live
+
+With Docker, put them in the folder **`my_strategies` next to `compose.yaml`**. Docker creates the
+folder at the first `docker compose up -d`; the app only reads it.
+
+- Every `.py` file in it (or a sub-folder with `__init__.py`) is loaded, and every strategy class in it
+  appears on the Paper tab as `my_strategies/<file>:<Class>`.
+- Edit the files with any editor. The list on the Paper tab refreshes within 15 seconds: reopen the
+  tab to see a new strategy or a change.
+- A run keeps the code it started with; a change applies to new runs. Each run records a fingerprint
+  (SHA-256) of the folder's code in its settings.
+- `my_strategies` lives outside the Docker volume: keep your own copy (or a private Git repository).
+
+An installation from before Python strategies has an older `compose.yaml`: download it again (see
+[Install](#install)) or add these lines to the `psr` service, then run `docker compose up -d`:
+
+```yaml
+    environment:
+      PSR_STRATEGY_PACKS: /strategies/my_strategies
+    volumes:
+      - psr-data:/data
+      - ./my_strategies:/strategies/my_strategies:ro
+```
+
+More folders work the same way: mount each one under `/strategies/` and list them in
+`PSR_STRATEGY_PACKS` separated by `:`. A folder name becomes the strategy's group name, so it may
+only contain letters, digits and `_` and must not start with a digit. Without Docker, set
+`PSR_STRATEGY_PACKS=/path/to/my_strategies` before `npm start`.
+
+### Your first strategy
+
+Save this as `my_strategies/ema_cross.py`:
+
+```python
+from psr_sdk import Param, Strategy
+from psr_sdk.ta import crossover, crossunder, ema
+
+
+class EmaCross(Strategy):
+    name = "EMA cross"
+    description = "Long when the fast EMA crosses above the slow one, short when it crosses below."
+    timeframe = "15m"        # default candle size; the Paper form can change it
+    warmup_bars = 300        # closed candles replayed before the start (no trading)
+    params = {               # each one becomes a field of the Paper form
+        "fast": Param(int, 12, min=2, max=200, label="Fast EMA", help="Bars in the fast average."),
+        "slow": Param(int, 26, min=3, max=500, label="Slow EMA", help="Bars in the slow average."),
+        "take_profit": Param(float, 1.5, min=0.1, max=20, label="Take-profit %"),
+        "stop_loss": Param(float, 1.0, min=0.1, max=20, label="Stop-loss %"),
+    }
+
+    def on_bar(self, ctx, bar):
+        closes = [b.close for b in ctx.bars]
+        fast, slow = ctx.params["fast"], ctx.params["slow"]
+        if len(closes) < slow + 1:
+            return
+        fast_now, slow_now = ema(closes, fast), ema(closes, slow)
+        fast_before, slow_before = ema(closes[:-1], fast), ema(closes[:-1], slow)
+        if crossover(fast_now, fast_before, slow_now, slow_before):
+            ctx.entry("L", "long")
+        elif crossunder(fast_now, fast_before, slow_now, slow_before):
+            ctx.entry("S", "short")
+        for entry_id, exit_id in (("L", "XL"), ("S", "XS")):
+            ctx.exit(exit_id, entry_id, profit_percent=ctx.params["take_profit"],
+                     loss_percent=ctx.params["stop_loss"])
+```
+
+Then open the **Paper** tab, set **Strategy type** to **Python strategy**, choose
+**EMA cross · pack my_strategies**, fill in its fields, choose markets and press **Start Paper**. If a
+file has an error, the Paper tab shows it (file and error) instead of the strategy.
+
+### How a strategy fits the engine
+
+- **A class** that inherits `Strategy` from `psr_sdk`. Optional class settings: `name`, `description`,
+  `timeframe`, `warmup_bars`, `pyramiding` (open trades per direction, default 1), `uses_trades`
+  (see `on_trade`), `max_positions_per_venue` (at most this many markets of one exchange hold a
+  position at once).
+- **One object per market.** Every market of a run gets its own copy of the class, so `self` holds
+  that market's state.
+- **Callbacks** (all optional):
+
+  | Callback | When |
+  |---|---|
+  | `on_start(ctx)` | once, after the warm-up, before live data |
+  | `on_bar(ctx, bar)` | every closed candle (`bar.open`, `high`, `low`, `close`, `volume`, `open_time`, `close_time`); during the warm-up `ctx.is_history` is true and orders are ignored |
+  | `on_quote(ctx, quote)` | every change of the best bid/ask (`quote.bid`, `quote.ask`, `quote.time_ms`) |
+  | `on_trade(ctx, trade)` | every public trade of the market (`trade.price`, `trade.size`, `trade.time_ms`), only with `uses_trades = True` |
+  | `on_fill(ctx, fill)` | each execution of the strategy's own orders |
+  | `on_order_rejected(ctx, order_id, reason)` | an entry that did not execute (for example `no_liquidity`, `position_limit`) |
+
+- **Orders** work like Pine's `strategy.*` functions and execute exactly as described in
+  [How orders execute in Paper](#how-orders-execute-in-paper):
+
+  | Call | Pine | Meaning |
+  |---|---|---|
+  | `ctx.entry(id, "long"/"short", limit=, stop=, size=1.0)` | `strategy.entry` | open or reverse; market without `limit`/`stop`; `size` scales the form's order size |
+  | `ctx.exit(id, from_entry, profit_percent=, loss_percent=, profit_ticks=, loss_ticks=, trail_...)` | `strategy.exit` | take-profit, stop-loss or trailing stop for the trades of an entry, priced from the real fill |
+  | `ctx.close(entry_id=None)`, `ctx.close_all()` | `strategy.close` | close at market |
+  | `ctx.cancel(id)`, `ctx.cancel_all()` | `strategy.cancel` | remove working orders |
+
+- **What it can read:** `ctx.bars` (closed candles, oldest first), `ctx.position`,
+  `ctx.position_avg_price`, `ctx.trades`, `ctx.orders`, `ctx.params`, `ctx.market`, `ctx.venue`,
+  `ctx.mintick`, `ctx.instrument` (exact price and size steps), `ctx.now_ms`; `ctx.log(text)` writes to
+  the run's events.
+- **Available code:** the Python standard library and `psr_sdk.ta` (`sma`, `ema`, `rsi`, `atr`,
+  `highest`, `lowest`, `crossover`, `crossunder`). Other packages (numpy, pandas…) are not installed.
+- **Keep callbacks quick.** They run inside the engine one after another: no waiting, no network
+  calls, no heavy work on every price change. An exception stops the run and names the strategy and
+  the callback.
+
+**Moving a Pine strategy to Python:** `input.int(…)` becomes a `Param`, the body of the script becomes
+`on_bar`, `close` is `bar.close`, `ta.ema(close, n)` is `ema(closes, n)`, `syminfo.mintick` is
+`ctx.mintick`, and `strategy.entry/exit/close/cancel` become the `ctx` calls above.
+
+The complete reference is [`docs/STRATEGY_SDK.md`](docs/STRATEGY_SDK.md).
+
+### Safety
+
+- A Python strategy is a program that runs **inside the app**, with the same access as the app — it
+  could read the account keys you saved. Put into `my_strategies` only code you wrote or have read
+  yourself; never run a stranger's strategy on an installation with keys.
+- In LIVE the same strategy trades your real money: run it in Paper first.
 
 ## Runs: watching a run
 
@@ -330,8 +462,9 @@ LIVE runs your strategy with **real orders on your own account**. It is off unti
 - **The app has no login.** Anyone who can open the page can start LIVE runs with your saved keys. Keep
   it on `127.0.0.1` (as `compose.yaml` does) or behind real authentication — see
   [running it on a server](#running-it-on-a-server).
-- Strategy code runs inside the same app that can read the keys. With a key saved, run only strategy
-  code you trust.
+- Strategy code (Pine and Python) runs inside the same app that can read the keys. With a key saved,
+  run only strategy code you trust; a Python strategy is a full program (see
+  [Python strategies](#python-strategies)).
 
 ## Limits at a glance
 
@@ -341,6 +474,7 @@ LIVE runs your strategy with **real orders on your own account**. It is off unti
 | Markets per exchange in one run | 15 (30 per run) |
 | LIVE runs per account at once | 1 |
 | Paper / LIVE timeframes | 1m, 5m, 15m, 30m, 1h, 4h, 1d |
+| Python strategies | Paper and LIVE (not Backtest) |
 | Backtest timeframes | 1m, 5m, 15m, 30m, 1h, 4h, 1d |
 | Backtests at once | 1 |
 | Backtest length | 120 days of minute candles by default (up to 189 days on a server setting) |
@@ -378,7 +512,7 @@ Run these in the folder with `compose.yaml`:
 | Remove the app **and all its data** (strategies, runs, keys) | `docker compose down -v` |
 
 Strategies, settings, run history and account keys live in the Docker volume `psr-data` and survive
-updates. An update restarts the app: runs that were working restart by themselves within 6 hours, but
+updates. Python strategies stay in your `my_strategies` folder; the app never changes it. An update restarts the app: runs that were working restart by themselves within 6 hours, but
 it is cleaner to stop LIVE runs first.
 
 **Back up** the volume (it contains your keys — keep the backup private):
@@ -467,6 +601,7 @@ above; the Docker image contains it). Useful settings:
 | `PAPER_ENABLED=1` | Enables Paper and LIVE. |
 | `STRATEGY_CATALOG_DIR`, `PAPER_EXPERIMENTS_DIR`, `PAPER_RUNS_DIR` | Where the library, the run history and the run journals live. |
 | `PSR_NAUTILUS_PYTHON` | The Python with Nautilus Trader. |
+| `PSR_STRATEGY_PACKS` | Folders with Python strategies, separated by `:` (Docker: `/strategies/my_strategies`). |
 | `PSR_LIVE_SECRETS_DIR` | Where account keys are stored (default: next to the run history). |
 | `PSR_LIVE_DISABLED=1` | Switches LIVE off for this installation. |
 | `PSR_RESUME_AFTER_RESTART=0` | Do not restart runs after a shutdown. |

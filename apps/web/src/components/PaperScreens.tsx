@@ -709,11 +709,14 @@ export function PaperSetupPreview({ source, fromBacktest, fromEditor = fromBackt
         <section className="paper-card paper-strategy-card">
           <span className="eyebrow">01 / STRATEGY</span>
           <h2>{kind === 'python' ? pythonInfo?.name ?? 'Python strategy' : sourceName(selectedSource)}</h2>
-          <label className="paper-source-select"><span>Strategy type {pythonAllowed ? <InfoTooltip label="strategy type" en="Pine code runs as written after every closed bar. Python strategies come from strategy packs (open examples or your own private pack) and react to every price update inside the execution engine. Both use the same real-time order execution." ru="Pine-код работает как написан, после каждого закрытого бара. Python-стратегии берутся из пакетов (открытые примеры или ваш приватный пакет) и реагируют на каждое изменение цены внутри движка исполнения. Исполнение заявок у обоих одинаковое, в реальном времени." /> : <InfoTooltip label="strategy type" en="This version runs strategies written in Pine Script, the TradingView language. Paste or open Pine code in the editor." ru="Эта версия запускает стратегии на Pine Script — языке TradingView. Вставьте или откройте Pine-код в редакторе." />}</span>
+          <label className="paper-source-select"><span>Strategy type {pythonAllowed ? <InfoTooltip label="strategy type" en="Pine code runs as written after every closed bar. Python strategies are your own .py files in the strategy folder (README: Python strategies) and react to every price update inside the execution engine. Both use the same real-time order execution." ru="Pine-код работает как написан, после каждого закрытого бара. Python-стратегии — ваши собственные .py-файлы в папке стратегий (README: Python strategies); они реагируют на каждое изменение цены внутри движка исполнения. Исполнение заявок у обоих одинаковое, в реальном времени." /> : <InfoTooltip label="strategy type" en="This version runs strategies written in Pine Script, the TradingView language. Paste or open Pine code in the editor." ru="Эта версия запускает стратегии на Pine Script — языке TradingView. Вставьте или откройте Pine-код в редакторе." />}</span>
             <select value={kind} aria-label="Strategy type" disabled={!pythonAllowed} onChange={(event) => { awaitingLastRun.current = false; setKind(event.target.value as 'pine' | 'python'); }}>
               <option value="pine">Pine code</option>
               {pythonAllowed && <option value="python" disabled={!pythonList?.length}>Python strategy</option>}
             </select></label>
+          {kind === 'pine' && pythonAllowed && !pythonList?.length && (pythonList || pythonError) && <p className="paper-card-footnote">{pythonError
+            ? `Python strategies could not load: ${pythonError}`
+            : 'No Python strategies yet: put your .py files in the strategy folder (README: Python strategies), then reopen this page.'}</p>}
           {kind === 'python' && <>
             <label className="paper-source-select"><span>Python strategy</span>
               <select value={pythonRef} aria-label="Python strategy" onChange={(event) => choosePython(event.target.value)}>

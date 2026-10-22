@@ -10,6 +10,11 @@ The API owns each experiment and starts one child process per run with
 close the API sends the strategy's order set to this process, which executes it
 against the current order book and reports each fill back.
 
+A Python strategy (`psr_sdk`, see `docs/STRATEGY_SDK.md`) runs inside this
+process instead: one strategy object per market receives every bar, quote and
+fill directly and hands its orders to the same order engine. Its pack folders
+come from `PSR_STRATEGY_PACKS`.
+
 ## Execution model
 
 - **Arrival time.** An order is evaluated when it would reach the exchange:
@@ -52,6 +57,8 @@ network:
 python apps/nautilus-paper/test_pine_runtime.py
 python apps/nautilus-paper/test_pine_recovery.py
 python apps/nautilus-paper/test_lifecycle.py
+python apps/nautilus-paper/test_sdk_runner.py     # Python strategies, no Nautilus
+python apps/nautilus-paper/test_sdk_runtime.py    # Python strategies in a real Sandbox
 ```
 
 Set `PSR_NAUTILUS_PYTHON` to the interpreter of the pinned Nautilus build.

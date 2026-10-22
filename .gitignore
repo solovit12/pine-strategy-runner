@@ -8,6 +8,8 @@ dist/
 coverage/
 var/intrabar-cache/
 .local/
+# Python strategies of a Docker install (compose.yaml mounts this folder)
+my_strategies/
 undefined/
 
 CLAUDE.local.md

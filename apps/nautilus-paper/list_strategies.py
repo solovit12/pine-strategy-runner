@@ -18,7 +18,8 @@ def main():
     parser.add_argument("--pack", action="append", default=[])
     args = parser.parse_args()
     rows, errors = discover(args.pack)
-    print(json.dumps({"strategies": rows, "errors": errors}, separators=(",", ":"), sort_keys=True))
+    # Unsorted: the form shows a strategy's fields in the order its author declared them.
+    print(json.dumps({"strategies": rows, "errors": errors}, separators=(",", ":")))
 
 
 if __name__ == "__main__":

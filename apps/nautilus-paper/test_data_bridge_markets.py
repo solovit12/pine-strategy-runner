@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import data_bridge as bridge
 from nautilus_trader.model import (
-    BookAction, BookOrder, CryptoPerpetual, Currency, Money, OrderBookDelta,
+    BookAction, BookOrder, BookType, CryptoPerpetual, Currency, Money, OrderBook, OrderBookDelta,
     OrderBookDeltas, OrderSide, Price, Quantity, QuoteTick, RecordFlag, Symbol,
 )
 
@@ -161,6 +161,45 @@ class MarketBridgeTests(unittest.TestCase):
             foreign = next(spec for spec in self.specs.values() if spec.venue_key != venue)
             with self.assertRaisesRegex(ValueError, "unconfigured Paper source"):
                 bridge.PaperFeedClient.publish_instrument(client, source_instrument(foreign))
+
+    def test_book_before_the_paper_book_exists_waits_for_a_snapshot(self):
+        # Run e651c787 (2026-10-23): Lighter DOGE's first book came 0.2 s after connect, before the
+        # busy node had set up the PAPER_LIGHTER book; the strategy failed on "order book unavailable".
+        spec = self.specs["lighter:DOGE"]
+        books, published, failures = {}, [], []
+        sync = {}
+        controller = SimpleNamespace(
+            public_frame=lambda *_: None, allow_public_frame=lambda *_: True,
+            stopping=False, recovering=False, live=None, book_sync_required=sync,
+            invalidate_book_projection=lambda key: sync.__setitem__(key, None),
+            fail=lambda message, key: failures.append(message))
+        bridge_self = SimpleNamespace(spec=spec, controller=controller,
+            cache=SimpleNamespace(order_book=books.get), _ensure_instrument=lambda: True,
+            feeds={"lighter": SimpleNamespace(publish_book=published.append)})
+        source = OrderBook(spec.source_id, BookType.L2_MBP)
+        books[spec.source_id] = source
+
+        def order(side, price):
+            return BookOrder(side, Price.from_str(price), Quantity.from_str("100"), 0)
+
+        snapshot = OrderBookDeltas(spec.source_id, [OrderBookDelta.clear(spec.source_id, 1, 100, 200),
+            OrderBookDelta(spec.source_id, BookAction.ADD, order(OrderSide.BUY, "0.100000"),
+                int(RecordFlag.F_SNAPSHOT), 1, 100, 200),
+            OrderBookDelta(spec.source_id, BookAction.ADD, order(OrderSide.SELL, "0.100100"),
+                int(RecordFlag.F_SNAPSHOT) | int(RecordFlag.F_LAST), 1, 100, 200)])
+        source.apply_deltas(snapshot)
+        bridge.PublicBridge.on_book_deltas(bridge_self, snapshot)
+        self.assertEqual((published, failures, sync), ([], [], {spec.key: None}))
+
+        books[spec.paper_id] = OrderBook(spec.paper_id, BookType.L2_MBP)
+        update = OrderBookDeltas(spec.source_id, [OrderBookDelta(spec.source_id, BookAction.UPDATE,
+            order(OrderSide.BUY, "0.100050"), int(RecordFlag.F_LAST), 2, 300, 400)])
+        source.apply_deltas(update)
+        bridge.PublicBridge.on_book_deltas(bridge_self, update)
+        self.assertEqual(failures, [])
+        self.assertEqual(len(published), 1)
+        self.assertTrue(bridge.complete_book(published[0]))
+        self.assertEqual(sync, {spec.key: (300, 400, 2)})
 
     def test_factories_keep_one_client_per_venue_and_register_all_offline_tracks(self):
         for venue in bridge.VENUE_KEYS:

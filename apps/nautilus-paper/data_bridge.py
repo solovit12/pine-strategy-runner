@@ -346,6 +346,10 @@ class PublicBridge(Strategy):
                     self.controller.book_sync_required[self.spec.key] = (batch.ts_event, batch.ts_init, batch.sequence)
                 if getattr(self.controller, "live", None) is not None:
                     self.controller.strategies[self.spec.key].on_book_deltas(batch)
+                elif self.cache.order_book(self.spec.paper_id) is None:
+                    # A busy start can bring the venue's first books before the PAPER_* book is set
+                    # up by the strategy's subscription: hold the copy, send the next as a snapshot.
+                    self.controller.invalidate_book_projection(self.spec.key)
                 else:
                     self.feeds[self.spec.venue_key].publish_book(batch)
         except Exception as exc:

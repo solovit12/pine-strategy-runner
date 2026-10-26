@@ -3,6 +3,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { readPaperDraft, writePaperDraft } from '../lib/editor-draft';
 import { isXyzMarket } from '../lib/stock-hours';
 import { XyzHoursNotice } from './XyzHoursNotice';
+import { ExchangeLimitsForecast, useExchangeLoad } from './ExchangeLimits';
+import { forecastRun, runLoadPlan } from '../../../../packages/shared/src/exchange-load';
 import {
   LIVE_MAX_EXCHANGE_STOP_PERCENT, LIVE_MAX_LEVERAGE, MAX_MARKETS_PER_VENUE, PAPER_MARKET_SYMBOL_PATTERN, PINE_LIVE_TIMEFRAMES, pythonStrategyRef,
   type PineLivePaperSettingsV1, type PythonLivePaperSettingsV1, type StrategyDetail, type StrategySummary,
@@ -571,6 +573,9 @@ export function PaperSetupPreview({ source, fromBacktest, fromEditor = fromBackt
   })();
   const settingsError = validPaperSettings(draft, capabilities) ?? (kind === 'python'
     ? (!pythonInfo ? 'Choose a Python strategy.' : paramsError) : null);
+  // A LIVE run Hyperliquid would refuse connections to does not start (the engine refuses it too).
+  const exchangeLoad = useExchangeLoad(draft.tracks.length > 0);
+  const loadRefusal = live && exchangeLoad ? forecastRun(exchangeLoad, runLoadPlan(draft)).refusal : null;
   const launchBlocker = !capabilities
     ? capabilityError ? `Cannot check Paper availability: ${capabilityError}` : 'Checking Paper availability…'
     : !capabilities.available
@@ -585,6 +590,8 @@ export function PaperSetupPreview({ source, fromBacktest, fromEditor = fromBackt
             ? 'Loading your LIVE accounts…'
           : live && accountBlocker
             ? accountBlocker
+          : loadRefusal
+            ? 'Exchange limit: Hyperliquid would not open this LIVE run\'s connections (see the note above).'
             : settingsError ?? (live && !liveConfirmed ? 'Confirm that this run trades real money.' : null);
   const willSave = kind === 'python' || sourceChoice === 'editor' || !savedStrategy
     || pythonStrategyRef(savedStrategy.version.source) !== null || !paperSettingsEqual(draft, savedStrategy.version.paperSettings);
@@ -833,6 +840,7 @@ export function PaperSetupPreview({ source, fromBacktest, fromEditor = fromBackt
         </ul>}
       </section>
 
+      <ExchangeLimitsForecast settings={draft} />
       <div className="paper-action-bar">
         <div><strong>{launching ? 'Starting…' : launchError ? 'Launch failed' : launchBlocker ? 'Not ready' : 'Ready'}</strong>
           <span>{launchBlocker ?? `${live ? 'LIVE, real money: ' : ''}${draft.tracks.length} market(s), ${timeframe} bars, ${draft.orderSizePercent}% per entry.`}</span>

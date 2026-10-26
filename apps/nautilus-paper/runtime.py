@@ -2403,7 +2403,7 @@ def build_node(config, controller):
     real = live is not None and live["exchange"] in ("real", "lighter")
     builder = (LiveNode.builder(
         f"PSR-PAPER-{config['runId'][:8]}", TraderId("PSR-PAPER-001"), Environment.LIVE if real else Environment.SANDBOX,
-    ).with_delay_post_stop_secs(0).with_timeout_connection(90 if real else 20))  # Hyperliquid needed over 30 s on Tokyo
+    ).with_delay_post_stop_secs(0).with_timeout_connection(90 if real else 20))  # Hyperliquid needed over 30 s on our server
     # Live starts from the account as the exchange reports it. Open orders and positions always come
     # back; the lookback only bounds old order and fill history, which earlier runs fill with orders
     # Nautilus cannot match and records as external (owner decision 2026-10-19: 60 minutes, was 24 h).

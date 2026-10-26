@@ -9,6 +9,7 @@ import { BACKTEST_TIMEFRAME_MS, type BacktestTimeframe, type Candle } from '../.
 import {
   HYPERLIQUID_HIP3_DEXES, PAPER_MARKET_SYMBOL_PATTERN, hip3FeeMultiplier,
 } from '../../../../packages/shared/src/strategy-catalog-contracts.js';
+import { recordExchangeRefusal, recordExchangeRequest } from './exchange-load.js';
 import { checkPublicRateLimit } from './public-rate-limit.js';
 
 export type PaperVenueKey = 'lighter' | 'hyperliquid';
@@ -85,16 +86,31 @@ async function requestJson(venue: PaperVenueKey, url: string, init: RequestInit,
   options: VenueDataOptions): Promise<unknown> {
   return paced(venue, async () => {
     const signal = AbortSignal.any([AbortSignal.timeout(REQUEST_TIMEOUT_MS), ...(options.signal ? [options.signal] : [])]);
-    const response = await (options.fetchImpl ?? fetch)(url, { ...init, signal });
-    await checkPublicRateLimit(response, label);
-    if (!response.ok) throw new Error(`${label} returned HTTP ${response.status}.`);
-    const text = await response.text();
-    if (text.length > MAX_BODY_BYTES) throw new Error(`${label} response is too large.`);
-    let parsed: unknown = parseLosslessJson(text, null, (value) => value);
-    // Lighter has been observed wrapping its JSON body in a JSON string.
-    if (typeof parsed === 'string') parsed = parseLosslessJson(parsed, null, (value) => value);
-    return parsed;
+    let weight = requestWeight(venue, init);
+    try {
+      const response = await (options.fetchImpl ?? fetch)(url, { ...init, signal });
+      if (response.status === 429) recordExchangeRefusal(venue);
+      await checkPublicRateLimit(response, label);
+      if (!response.ok) throw new Error(`${label} returned HTTP ${response.status}.`);
+      const text = await response.text();
+      if (text.length > MAX_BODY_BYTES) throw new Error(`${label} response is too large.`);
+      let parsed: unknown = parseLosslessJson(text, null, (value) => value);
+      // Lighter has been observed wrapping its JSON body in a JSON string.
+      if (typeof parsed === 'string') parsed = parseLosslessJson(parsed, null, (value) => value);
+      // Hyperliquid adds weight for every 60 candles returned.
+      if (venue === 'hyperliquid' && Array.isArray(parsed)) weight += Math.floor(parsed.length / 60);
+      return parsed;
+    } finally {
+      recordExchangeRequest(venue, weight);
+    }
   }, options.signal);
+}
+
+/** Hyperliquid's weight of an info request (account and book reads 2, others 20); Lighter counts requests. */
+function requestWeight(venue: PaperVenueKey, init: RequestInit): number {
+  if (venue === 'lighter') return 1;
+  const type = typeof init.body === 'string' ? /"type"\s*:\s*"(\w+)"/.exec(init.body)?.[1] : undefined;
+  return type && ['l2Book', 'allMids', 'clearinghouseState', 'spotClearinghouseState', 'orderStatus', 'exchangeStatus'].includes(type) ? 2 : 20;
 }
 
 function record(value: unknown, label: string): Record<string, unknown> {

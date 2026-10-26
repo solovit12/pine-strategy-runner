@@ -4,6 +4,7 @@ import type {
   LiveAccountView, LiveAccountsView, LiveConnectionCheck, LiveExchange,
 } from '../../../../packages/shared/src/paper-experiment-contracts';
 import { checkLiveAccount, createLiveAccount, loadLiveAccounts, removeLiveAccount, updateLiveAccount } from '../lib/api';
+import { ExchangeLimitsPanel, useExchangeLoad } from './ExchangeLimits';
 import { InfoTooltip } from './TranslatedText';
 
 function errorText(reason: unknown): string {
@@ -142,6 +143,7 @@ function CheckResult({ check, exchange }: { check: LiveConnectionCheck; exchange
 /** The Accounts page (owner, 2026-10-20): exchange accounts with their API keys; a LIVE run trades one account per exchange. */
 export function LiveAccountsPage({ onOpenRun }: { onOpenRun: (runId: string) => void }) {
   const [view, setView] = useState<LiveAccountsView | null>(null);
+  const exchangeLoad = useExchangeLoad();
   const [editing, setEditing] = useState<LiveAccountView | 'new' | null>(null);
   const [checking, setChecking] = useState<string | null>(null);
   const [checks, setChecks] = useState<Record<string, LiveConnectionCheck>>({});
@@ -237,5 +239,6 @@ export function LiveAccountsPage({ onOpenRun }: { onOpenRun: (runId: string) => 
           {checks[account.id] && <CheckResult check={checks[account.id]!} exchange={account.exchange} />}
         </article>)}
       </div>}
+    <ExchangeLimitsPanel view={exchangeLoad} />
   </section>;
 }

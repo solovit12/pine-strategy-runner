@@ -139,6 +139,26 @@ export const BacktestRequestSchema = BacktestRequestInputSchema.transform((value
 
 export type BacktestRequest = z.infer<typeof BacktestRequestSchema>;
 
+/** The editor's check of Pine code before a run (POST /api/pine/check). */
+export const PineCheckRequestSchema = z.object({
+  source: z.string().max(200_000),
+  symbol: z.string().max(64).optional(),
+  timeframe: BacktestTimeframeSchema.optional(),
+});
+
+export type PineCheckRequest = z.infer<typeof PineCheckRequestSchema>;
+
+export interface PineCheckResponse {
+  /** Why the code cannot run as a strategy at all (syntax, version, no strategy(...)), or null. */
+  codeError: string | null;
+  issues: Array<{
+    level: 'stop' | 'differs';
+    line: number;
+    where: 'all' | 'backtest' | 'paper';
+    message: string;
+  }>;
+}
+
 export interface NormalizedTrade {
   number: number;
   side: 'long' | 'short';

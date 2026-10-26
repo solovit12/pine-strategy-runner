@@ -1,4 +1,4 @@
-import Editor from '@monaco-editor/react';
+import Editor, { type OnMount } from '@monaco-editor/react';
 import { AlertTriangle, Play, Settings2, ShieldCheck, Square } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { PINETS_VERSION, type BacktestRequest, type BacktestResponse, type BacktestTimeframe, type PresetResponse } from '../../../packages/shared/src/contracts';
@@ -7,6 +7,8 @@ import { BinanceMarketSelector } from './components/BinanceMarketSelector';
 import { Metrics } from './components/Metrics';
 import { LiveAccountsPage } from './components/LiveSettings';
 import { PaperRunsPreview, PaperSetupPreview, type PaperVersionRequest } from './components/PaperScreens';
+import { PineCheck } from './components/PineCheck';
+import { ExchangeLimitsChip, useExchangeLoad } from './components/ExchangeLimits';
 import { PriceChart } from './components/PriceChart';
 import { StrategyLibraryBrowser } from './components/StrategyLibraryBrowser';
 import { InfoTooltip } from './components/TranslatedText';
@@ -159,6 +161,7 @@ export function App() {
   const [paperTabMounted, setPaperTabMounted] = useState(() => pageFromPath() === 'paper-setup');
   useEffect(() => { if (page === 'paper-setup') setPaperTabMounted(true); }, [page]);
   const [paperMode, setPaperMode] = useState('BACKTEST ONLY');
+  const exchangeLoad = useExchangeLoad(paperMode === 'BACKTEST + PAPER');
   const [paperFromBacktest, setPaperFromBacktest] = useState(false);
   const [lastBacktestedRequest, setLastBacktestedRequest] = useState<BacktestRequest | null>(null);
   const [catalogEnabled, setCatalogEnabled] = useState(false);
@@ -198,6 +201,7 @@ export function App() {
   const lastRunStrategy = useRef<StrategyDetail | null>(null);
   const openButtonRef = useRef<HTMLButtonElement | null>(null);
   const saveButtonRef = useRef<HTMLButtonElement | null>(null);
+  const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
   const declarationRef = useRef<StrategyDeclarationProperties>({});
   /** Set once the saved draft (if any) is back in the form; saving starts only then. */
   const draftRestored = useRef(false);
@@ -717,6 +721,10 @@ export function App() {
         </nav>
         <div className="top-status">
           <span><ShieldCheck size={13} />{paperMode}</span>
+          <ExchangeLimitsChip view={exchangeLoad} onOpen={() => {
+            navigate('accounts');
+            window.setTimeout(() => document.getElementById('exchange-limits')?.scrollIntoView({ behavior: 'smooth' }), 100);
+          }} />
           <span className="version">v0.1</span>
         </div>
       </header>
@@ -770,6 +778,7 @@ export function App() {
               defaultLanguage="plaintext"
               value={source}
               onChange={(value) => setSource(value || '')}
+              onMount={(editor) => { editorRef.current = editor; }}
               theme="vs-dark"
               loading={<span className="editor-loading">Loading the editor…</span>}
               options={{
@@ -779,6 +788,13 @@ export function App() {
               }}
             />
           </div>
+          <PineCheck source={source} symbol={symbol} timeframe={timeframe} onGoToLine={(line) => {
+            const editor = editorRef.current;
+            if (!editor) return;
+            editor.revealLineInCenter(line);
+            editor.setPosition({ lineNumber: line, column: 1 });
+            editor.focus();
+          }} />
           <div className="editor-footer"><span>UTF-8</span><span>Spaces: 4</span><span>UTC</span></div>
         </div>
         <PriceChart result={result} loading={state === 'running'} />

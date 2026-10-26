@@ -72,7 +72,7 @@ export async function listPythonStrategies(python: string, projectRoot: string, 
   return JSON.parse(stdout);
 }
 /**
- * A venue candle is read this long after its bar closed. Measured from Tokyo on 2026-10-10:
+ * A venue candle is read this long after its bar closed. Measured from our server on 2026-10-10:
  * Hyperliquid's REST candle was final 0.3 s after the close, Lighter's 0.6 s. Each later read
  * re-checks the previous candle and logs a revision (`candleRevised`).
  */

@@ -40,7 +40,7 @@ ENTRY_MAX_WAIT_MS = 2_000
 DEFAULT_VENUE_SOURCE_AGE_MS = 2_000
 DEFAULT_TRACK_QUIET_MS = 30_000
 # A venue source time this far ahead of our clock is clock skew, not a message
-# from the future (Tokyo lagged Lighter by ~6-10 ms on 2026-10-20).
+# from the future (our server lagged Lighter by ~6-10 ms on 2026-10-20).
 VENUE_CLOCK_SKEW_MS = 50
 # A book first seen after arrival may stand in for the arrival-time book only
 # within one Hyperliquid snapshot period after the touch; later is look-ahead.

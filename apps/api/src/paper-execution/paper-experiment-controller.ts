@@ -134,6 +134,7 @@ export class PaperExperimentControllerV1 {
   readonly #liveExchanges: () => readonly LiveExchange[];
   readonly #liveAccountName: (id: string) => string | null;
   readonly #legacyLiveAccountId: (exchange: LiveExchange) => string | null;
+  readonly #liveLoadRefusal: (settings: StartPaperExperimentRequest['settings']) => Promise<string | null>;
   #otherLiveOwnerReason: string | null = null;
   readonly #managed = new Map<string, ManagedExperiment>();
 
@@ -152,6 +153,8 @@ export class PaperExperimentControllerV1 {
     readonly liveAccountName?: (id: string) => string | null;
     /** The account made from an exchange's single key of before accounts: what an older Live run trades. */
     readonly legacyLiveAccountId?: (exchange: LiveExchange) => string | null;
+    /** Why a new Live run must not start for an exchange limit (exchange-load.ts), or null. */
+    readonly liveLoadRefusal?: (settings: StartPaperExperimentRequest['settings']) => Promise<string | null>;
   }) {
     this.#store = options.directory ? new PaperExperimentStoreV1(options.directory, options.now) : null;
     this.#directory = options.directory;
@@ -164,6 +167,7 @@ export class PaperExperimentControllerV1 {
     this.#liveExchanges = options.liveExchanges ?? (() => (this.#liveTrading() ? ['lighter'] : []));
     this.#liveAccountName = options.liveAccountName ?? (() => null);
     this.#legacyLiveAccountId = options.legacyLiveAccountId ?? (() => null);
+    this.#liveLoadRefusal = options.liveLoadRefusal ?? (async () => null);
     if (this.#store) {
       try {
         // The previous process may have died after taking a Gateway batch.
@@ -237,6 +241,7 @@ export class PaperExperimentControllerV1 {
   async start(
     request: StartPaperExperimentRequest,
     saved: StrategyDetail | null,
+    options: { readonly resumed?: boolean } = {},
   ): Promise<{ readonly experiment: PaperExperimentDetail; readonly existing: boolean }> {
     if (!saved || saved.strategy.id !== request.strategyId || saved.version.version !== request.version) {
       throw new PaperExperimentControllerError('NOT_FOUND', 'The requested saved strategy version was not found.');
@@ -301,6 +306,9 @@ export class PaperExperimentControllerV1 {
       if (conflict) {
         throw new PaperExperimentControllerError('PAPER_EXPERIMENT_LIMIT', liveAccountBusyMessage(this.#liveAccountName(conflict) ?? conflict));
       }
+      // A run resumed after a restart was already trading: it is not judged again.
+      const loadRefusal = options.resumed ? null : await this.#liveLoadRefusal(request.settings);
+      if (loadRefusal) throw new PaperExperimentControllerError('PAPER_EXPERIMENT_LIMIT', loadRefusal);
     }
     if (JSON.stringify(saved.version.paperSettings) !== JSON.stringify(request.settings)) {
       throw new PaperExperimentControllerError('SOURCE_VERSION_CONFLICT', 'Paper launch settings differ from the saved version. Save the changes as a new version before launch.');
@@ -454,7 +462,7 @@ export class PaperExperimentControllerV1 {
           strategyId: stopped.strategyId, version: stopped.strategyVersion, sourceSha256: stopped.sourceSha256,
           settings: strategy?.version.paperSettings, idempotencyKey: randomUUID(),
         });
-        const { experiment } = await this.start(request, strategy);
+        const { experiment } = await this.start(request, strategy, { resumed: true });
         results.push({ stoppedId, resumedId: experiment.id });
       } catch (error) {
         results.push({ stoppedId, error: error instanceof Error ? error.message : String(error) });

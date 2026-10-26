@@ -27,8 +27,14 @@ import {
   BacktestRequestSchema,
   type Candle,
   type ChartCandle,
+  PineCheckRequestSchema,
+  type PineCheckResponse,
   type PresetResponse,
 } from '../../../packages/shared/src/contracts.js';
+import { pineCodeError } from '../../../packages/pine-runtime/src/pine-errors.js';
+import { pineCompatibility } from '../../../packages/pine-runtime/src/pine-compatibility.js';
+import { forecastRun, runLoadPlan } from '../../../packages/shared/src/exchange-load.js';
+import { activeRunsFrom, ExchangeLoadMonitor } from './paper-execution/exchange-load.js';
 import {
   HYPERLIQUID_BASE_PERPETUAL_FEES,
   feeRateFractionToPercent,
@@ -318,13 +324,23 @@ export async function buildApp(options: BuildAppOptions = {}) {
       })()
       : null;
   if (paperRuntimeFactory && strategyCatalogDir) getStrategyCatalog();
+  let exchangeLoad: ExchangeLoadMonitor | null = null;
   const paperExperiments = role === 'site' ? null : new PaperExperimentControllerV1({
     directory: paperExperimentsDir, catalogConfigured: Boolean(strategyCatalogDir),
     runtimeFactory: paperRuntimeFactory, now, pythonStrategies, liveTrading,
     liveExchanges: () => liveSettings?.liveExchanges() ?? [],
     liveAccountName: (id) => liveSettings?.account(id)?.name ?? null,
     legacyLiveAccountId: (exchange) => liveSettings?.legacyAccountId(exchange) ?? null,
+    liveLoadRefusal: async (settings) => (exchangeLoad ? forecastRun(await exchangeLoad.view(), runLoadPlan(settings)).refusal : null),
   });
+  if (paperExperiments) {
+    exchangeLoad = new ExchangeLoadMonitor({
+      runs: activeRunsFrom(() => paperExperiments.list(), (id) => paperExperiments.get(id)),
+      account: (id) => liveSettings?.account(id) ?? null,
+    });
+    if (paperRuntimeFactory) exchangeLoad.start();
+    app.addHook('onClose', async () => exchangeLoad?.stop());
+  }
   if (paperExperiments) busyLiveAccounts = () => paperExperiments.busyLiveAccounts();
   app.addHook('onClose', async () => { await paperExperiments?.close(); strategyCatalog?.close(); });
   // Runs the system stopped for a server shutdown start again once this engine is up.
@@ -436,6 +452,11 @@ export async function buildApp(options: BuildAppOptions = {}) {
   }));
 
   if (paperExperiments) {
+    const monitor = exchangeLoad!;
+    app.get('/api/paper/exchange-load', async (_request, reply) => {
+      reply.header('Cache-Control', 'no-store');
+      return monitor.view();
+    });
     registerPaperRoutes(app, {
       paperExperiments, paperRuntimeFactory, paperRunsDir, strategyPacks, nautilusPython, projectRoot, getStrategyCatalog, pythonStrategies,
     });
@@ -547,6 +568,20 @@ export async function buildApp(options: BuildAppOptions = {}) {
       }
       throw error;
     }
+  });
+
+  // Called by the editor a moment after each edit: quiet in the log.
+  app.post('/api/pine/check', { logLevel: 'warn' }, async (request, reply): Promise<PineCheckResponse> => {
+    reply.header('Cache-Control', 'no-store');
+    const parsed = PineCheckRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.code(400).send({ kind: 'INVALID_PINE_CHECK', error: 'Invalid code check request.', details: parsed.error.issues });
+    }
+    const { source, symbol, timeframe } = parsed.data;
+    return {
+      codeError: pineCodeError(source)?.message ?? null,
+      issues: pineCompatibility(source, { chartSymbol: symbol, chartTimeframe: timeframe }),
+    };
   });
 
   app.post('/api/backtests', async (request, reply) => {

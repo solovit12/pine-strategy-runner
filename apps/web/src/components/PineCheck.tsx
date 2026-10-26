@@ -1,0 +1,63 @@
+import { AlertTriangle, CheckCircle2, OctagonX } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import type { BacktestTimeframe, PineCheckResponse } from '../../../../packages/shared/src/contracts';
+import { checkPineCode } from '../lib/api';
+
+/** Wait after the last keystroke before asking the server. */
+export const PINE_CHECK_DELAY_MS = 600;
+
+const WHERE: Record<PineCheckResponse['issues'][number]['where'], string> = {
+  all: '', backtest: 'Backtest', paper: 'Paper',
+};
+
+/**
+ * Compatibility of the editor's Pine code with this service, checked a moment after each edit:
+ * red stops the run, amber may differ from TradingView. A hint only: it never blocks a run.
+ */
+export function PineCheck({ source, symbol, timeframe, onGoToLine }: {
+  source: string; symbol: string; timeframe: BacktestTimeframe; onGoToLine?: (line: number) => void;
+}) {
+  const [result, setResult] = useState<PineCheckResponse | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [checking, setChecking] = useState(false);
+
+  useEffect(() => {
+    if (!source.trim()) { setResult(null); setFailed(false); return; }
+    const controller = new AbortController();
+    setChecking(true);
+    const timer = window.setTimeout(() => {
+      checkPineCode({ source, symbol, timeframe }, controller.signal)
+        .then((next) => { setResult(next); setFailed(false); })
+        .catch((error) => { if (!controller.signal.aborted) { setFailed(true); console.warn('Pine check unavailable', error); } })
+        .finally(() => { if (!controller.signal.aborted) setChecking(false); });
+    }, PINE_CHECK_DELAY_MS);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [source, symbol, timeframe]);
+
+  if (!source.trim()) return null;
+  const issues = result?.issues ?? [];
+  const stops = issues.filter((issue) => issue.level === 'stop').length + (result?.codeError ? 1 : 0);
+  const differs = issues.length - issues.filter((issue) => issue.level === 'stop').length;
+  const summary = failed ? 'Check unavailable'
+    : !result ? 'Checking…'
+      : stops + differs === 0 ? 'No problems found'
+        : [stops ? `${stops} will stop the run` : '', differs ? `${differs} may differ from TradingView` : ''].filter(Boolean).join(' · ');
+  const tone = failed || !result ? 'idle' : stops ? 'stop' : differs ? 'differs' : 'ok';
+
+  return <section className="pine-check" aria-label="Code compatibility" aria-busy={checking}>
+    <div className={`pine-check-summary ${tone}`} role="status">
+      {tone === 'ok' ? <CheckCircle2 size={14} /> : tone === 'stop' ? <OctagonX size={14} /> : tone === 'differs' ? <AlertTriangle size={14} /> : null}
+      <span>Compatibility: {summary}</span>
+    </div>
+    {result && !failed && (result.codeError || issues.length > 0) && <ul className="pine-check-list">
+      {result.codeError && <li className="stop">{result.codeError}</li>}
+      {issues.map((issue, index) => <li key={`${issue.line}-${index}`} className={issue.level}>
+        {onGoToLine
+          ? <button type="button" className="pine-check-line" onClick={() => onGoToLine(issue.line)}>Line {issue.line}</button>
+          : <span className="pine-check-line">Line {issue.line}</span>}
+        <span>{issue.message}</span>
+        {WHERE[issue.where] && <small>{WHERE[issue.where]} only</small>}
+      </li>)}
+    </ul>}
+  </section>;
+}

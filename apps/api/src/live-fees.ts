@@ -1,4 +1,5 @@
 import type { LiveAccountFees, LiveAccountView } from '../../../packages/shared/src/paper-experiment-contracts.js';
+import { recordExchangeRefusal, recordExchangeRequest } from './paper-execution/exchange-load.js';
 
 /**
  * The fees an exchange charges one Live account, read from the exchange's public API (no key):
@@ -23,8 +24,10 @@ export function createLiveFeeReader(fetchImpl: Fetch = fetch, now: () => number 
   async function read(account: LiveAccountView): Promise<LiveAccountFees> {
     const signal = AbortSignal.timeout(10_000);
     if (account.exchange === 'hyperliquid') {
+      recordExchangeRequest('hyperliquid', 20);
       const response = await fetchImpl(HYPERLIQUID_INFO, { method: 'POST', signal, headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ type: 'userFees', user: account.accountAddress }) });
+      if (response.status === 429) recordExchangeRefusal('hyperliquid');
       if (!response.ok) throw new Error(`Hyperliquid answered ${response.status}.`);
       const body = await response.json() as { userAddRate?: unknown; userCrossRate?: unknown };
       const makerPercent = percent(body.userAddRate);
@@ -33,7 +36,9 @@ export function createLiveFeeReader(fetchImpl: Fetch = fetch, now: () => number 
       return { exchange: 'hyperliquid', makerPercent, takerPercent,
         source: 'Your Hyperliquid account\'s rates (its volume tier); xyz: markets pay their own multiple.' };
     }
+    recordExchangeRequest('lighter');
     const response = await fetchImpl(`${LIGHTER_ACCOUNT}?by=index&value=${account.accountIndex}`, { signal });
+    if (response.status === 429) recordExchangeRefusal('lighter');
     if (!response.ok) throw new Error(`Lighter answered ${response.status}.`);
     const body = await response.json() as { accounts?: Array<{ account_type?: unknown }> };
     const type = body.accounts?.[0]?.account_type;

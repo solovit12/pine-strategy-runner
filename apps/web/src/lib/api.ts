@@ -1,5 +1,8 @@
-import type { BacktestRequest, BacktestResponse, PresetResponse } from '../../../../packages/shared/src/contracts';
+import type {
+  BacktestRequest, BacktestResponse, PineCheckRequest, PineCheckResponse, PresetResponse,
+} from '../../../../packages/shared/src/contracts';
 import type { BinanceFuturesMarketList } from '../../../../packages/shared/src/binance-market-list-contracts';
+import type { ExchangeLoadView } from '../../../../packages/shared/src/exchange-load';
 import type {
   CreateStrategyInput,
   SaveStrategyVersionInput,
@@ -60,6 +63,19 @@ export async function runBacktest(request: BacktestRequest, signal: AbortSignal)
     }
     throw error;
   }
+}
+
+export async function loadExchangeLoad(signal?: AbortSignal): Promise<ExchangeLoadView> {
+  return parse<ExchangeLoadView>(await fetch('/api/paper/exchange-load', { signal }));
+}
+
+export async function checkPineCode(request: PineCheckRequest, signal: AbortSignal): Promise<PineCheckResponse> {
+  return parse<PineCheckResponse>(await fetch('/api/pine/check', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(request),
+    signal,
+  }));
 }
 
 export async function loadStrategyCatalogCapabilities(signal?: AbortSignal): Promise<{ enabled: boolean }> {

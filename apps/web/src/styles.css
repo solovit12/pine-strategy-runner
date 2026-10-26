@@ -106,6 +106,20 @@ button { border: 0; }
 .editor-wrap { height: 381px; background: #101416; }
 .editor-wrap .monaco-editor, .editor-wrap .margin { background-color: #101416 !important; }
 .editor-loading { display: grid; height: 100%; place-items: center; color: #a0adb2; font-size: 14px; }
+.pine-check { border-top: 1px solid var(--line); background: #0d1214; font-size: 12px; }
+.pine-check-summary { display: flex; align-items: center; gap: 7px; min-height: 32px; padding: 6px 13px; color: #a0adb2; font: 12px/1.3 "Cascadia Code", Consolas, monospace; }
+.pine-check-summary.ok { color: var(--green); }
+.pine-check-summary.stop { color: var(--red); }
+.pine-check-summary.differs { color: var(--amber); }
+.pine-check-list { max-height: 150px; margin: 0; padding: 0 13px 8px; overflow-y: auto; list-style: none; }
+.pine-check-list li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; padding: 5px 0 5px 9px; border-left: 2px solid var(--amber); color: #d9e2e5; line-height: 1.45; }
+.pine-check-list li + li { margin-top: 4px; }
+.pine-check-list li.stop { border-left-color: var(--red); }
+.pine-check-list small { color: #a0adb2; font: 11px/1.3 "Cascadia Code", Consolas, monospace; }
+.pine-check-line { flex: none; padding: 0; border: 0; color: #a0adb2; background: none; font: 12px/1.45 "Cascadia Code", Consolas, monospace; }
+button.pine-check-line { cursor: pointer; text-decoration: underline dotted; }
+button.pine-check-line:hover { color: var(--green); }
+button.pine-check-line:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
 .editor-footer { min-height: 36px; padding: 8px 13px; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 14px; border-top: 1px solid var(--line); color: #a0adb2; font: 12px/1.3 "Cascadia Code", Consolas, monospace; }
 .chart-canvas { position: relative; flex: 1; min-height: 409px; overflow: hidden; }
 .chart-empty, .chart-loading { position: absolute; z-index: 2; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #101416; color: var(--muted); }
@@ -547,3 +561,30 @@ tbody tr:hover { background: #141a1c; }
 .paper-history-pnl { white-space: nowrap; font-size: 13px; }
 .paper-history-pnl div + div { margin-top: 3px; }
 .paper-history-pnl span { color: #84949a; }
+
+/* Exchange limits: header chip, Accounts table, launch forecast */
+.exchange-limits-chip { display: flex; gap: 5px; align-items: center; padding: 8px 10px; border: 1px solid #2d5945; color: var(--green); background: transparent; cursor: pointer; font: 700 12px/1.25 "Cascadia Code", Consolas, monospace; letter-spacing: .03em; }
+.exchange-limits-chip.near { border-color: #6b5527; color: var(--amber); background: #1d1910; }
+.exchange-limits-chip.over { border-color: #7a3335; color: var(--red); background: #241314; }
+.exchange-limits-chip:hover { filter: brightness(1.15); }
+.exchange-limits-chip:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+.exchange-limits { margin-top: 18px; scroll-margin-top: 16px; }
+.exchange-limits > p { max-width: 760px; color: #aeb9bd; font-size: 13px; line-height: 1.5; }
+.exchange-limits-table-wrap { overflow-x: auto; }
+.exchange-limits-table { width: 100%; min-width: 560px; border-collapse: collapse; font-size: 13px; }
+.exchange-limits-table th { padding: 7px 8px; color: #a0adb2; font: 700 11px/1.3 "Cascadia Code", Consolas, monospace; text-align: left; text-transform: uppercase; border-bottom: 1px solid var(--line); }
+.exchange-limits-table td { padding: 9px 8px; border-bottom: 1px solid #1c2427; color: #d9e2e5; vertical-align: top; }
+.exchange-limits-table td small { display: block; margin-top: 3px; color: #a0adb2; font-size: 11px; }
+.exchange-limits-table td small.refused { color: var(--red); }
+.exchange-limits-table tr.near strong { color: var(--amber); }
+.exchange-limits-table tr.over strong { color: var(--red); }
+.exchange-limits-bar { display: block; height: 5px; margin-top: 5px; overflow: hidden; background: #1c2427; }
+.exchange-limits-bar i { display: block; height: 100%; background: var(--green); }
+.exchange-limits-table tr.near .exchange-limits-bar i { background: var(--amber); }
+.exchange-limits-table tr.over .exchange-limits-bar i { background: var(--red); }
+.exchange-limits-forecast { display: flex; gap: 10px; align-items: flex-start; margin: 0 0 14px; padding: 11px 13px; border: 1px solid #6b5527; background: #1d1910; color: #f0dfb9; font-size: 13px; line-height: 1.5; }
+.exchange-limits-forecast > svg { flex: none; margin-top: 2px; color: var(--amber); }
+.exchange-limits-forecast strong { display: block; color: #ffe2a8; }
+.exchange-limits-forecast.over { border-color: #7a3335; background: #241314; color: #ffd2d3; }
+.exchange-limits-forecast.over > svg, .exchange-limits-forecast.over strong { color: var(--red); }
+@media (max-width: 760px) { .top-status .exchange-limits-chip { padding: 6px 8px; } }

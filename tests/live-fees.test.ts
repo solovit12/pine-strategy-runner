@@ -7,7 +7,7 @@ import type { LiveAccountView } from '../packages/shared/src/paper-experiment-co
 const base = { name: 'A', enabled: true, keySaved: true, keySource: 'app' as const, runId: null };
 const hyperliquid: LiveAccountView = { ...base, id: 'acc-hl-0001', exchange: 'hyperliquid', accountIndex: null, apiKeyIndex: null,
   accountAddress: `0x${'ab'.repeat(20)}` };
-const lighter: LiveAccountView = { ...base, id: 'acc-li-0001', exchange: 'lighter', accountIndex: 562, apiKeyIndex: 5, accountAddress: null };
+const lighter: LiveAccountView = { ...base, id: 'acc-li-0001', exchange: 'lighter', accountIndex: 4321, apiKeyIndex: 3, accountAddress: null };
 
 describe('LIVE fees of an account', () => {
   it("reads Hyperliquid's own rates for the address and Lighter's account type", async () => {
@@ -21,7 +21,7 @@ describe('LIVE fees of an account', () => {
     expect(await reader(hyperliquid)).toMatchObject({ exchange: 'hyperliquid', makerPercent: 0.012, takerPercent: 0.04 });
     expect(asked[0]).toContain(`"type":"userFees","user":"0x${'ab'.repeat(20)}"`);
     expect(await reader(lighter)).toMatchObject({ exchange: 'lighter', makerPercent: 0, takerPercent: 0 });
-    expect(asked[1]).toContain('account?by=index&value=562');
+    expect(asked[1]).toContain('account?by=index&value=4321');
     // Cached for a while: no second request.
     await reader(hyperliquid);
     expect(asked).toHaveLength(2);

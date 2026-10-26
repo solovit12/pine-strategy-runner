@@ -27,6 +27,10 @@ High replay:
   `trail_offset`), partial exits (`qty`, `qty_percent`; one fill per trade per exit id, as
   on parent bars) and OCA cancel / reduce groups of entry orders (added 2026-10-12);
 - emits deterministic fill/cancel audit records.
+- adds the strategy property `slippage_percent` (2026-10-26): a percent of the price added
+  against the fill direction wherever `slippage` ticks apply (market and stop orders, market
+  and stop-loss / trailing exits; never limits or take-profits), the fill rounded to the tick on
+  the worse side; external (real) fills take no synthetic slippage of either kind.
 - exposes read-only pending-order capability metadata to the product adapter;
 - reports required margin and whether each replay point would require a
   margin call, without performing an unqualified High liquidation.

@@ -32,7 +32,7 @@ const backtestSettings = {
   exchange: 'Hyperliquid', marketType: 'Perpetual', symbol: 'SOL', timeframe: '1m',
   dateRange: { start: '2026-09-01', end: '2026-09-02' }, initialCapital: 10_000, baseCurrency: 'USDC',
   defaultOrderSizeValue: 10, defaultOrderSizeType: 'percent_of_equity', pyramiding: 1,
-  feeModel: 'manual', commissionType: 'percent', commissionValue: 0.05, slippageTicks: 0,
+  feeModel: 'manual', commissionType: 'percent', commissionValue: 0.05, slippagePercent: 0,
 };
 const sol: VenueMarket = { venue: 'lighter', market: 'SOL', marketId: '2', sizeStep: 0.001, minBaseQuantity: 0.001,
   minQuote: 10, priceStep: 0.01, maxPriceDecimals: 2, feeMultiplier: 1 };

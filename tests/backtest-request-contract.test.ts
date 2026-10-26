@@ -15,7 +15,7 @@ const base = {
   pyramiding: 1,
   commissionType: 'percent' as const,
   commissionValue: 0.1,
-  slippageTicks: 0,
+  slippagePercent: 0,
 };
 
 const binanceBase = {

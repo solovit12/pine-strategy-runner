@@ -24,7 +24,8 @@ const EditorDraftSchema = z.object({
   commissionValueInput: z.string(),
   longLeverage: z.string(),
   shortLeverage: z.string(),
-  slippageTicks: z.number(),
+  /** Drafts saved before the percent setting had slippage ticks instead: they take the default. */
+  slippagePercent: z.number().optional(),
   processOrdersOnClose: z.boolean(),
   /** Bar detail model; drafts saved before it existed use minute replay. */
   barDetail: z.enum(['high', 'default']).optional(),

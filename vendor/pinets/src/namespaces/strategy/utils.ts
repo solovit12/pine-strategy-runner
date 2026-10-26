@@ -1170,10 +1170,17 @@ function computeLegCommission(context: any, strategy: StrategyState, qty: number
 function applySlippage(context: any, direction: number, nominalPrice: number): number {
     const strategy: StrategyState = context.strategy;
     const slippage = strategy.config.slippage ?? 0;
-    if (!slippage || slippage === 0) return nominalPrice;
+    const percent = strategy.config.slippage_percent ?? 0;
+    if (!slippage && !percent) return nominalPrice;
     const mintick = context.pine?.syminfo?.mintick ?? 0.01;
-    const slippageAmount = slippage * mintick;
-    return direction === 1 ? nominalPrice + slippageAmount : nominalPrice - slippageAmount;
+    const slippageAmount = slippage * mintick + (nominalPrice * percent) / 100;
+    const adjusted = direction === 1 ? nominalPrice + slippageAmount : nominalPrice - slippageAmount;
+    if (!percent || !(mintick > 0)) return adjusted;
+    // A percent lands between ticks: fill on the tick grid, on the worse side.
+    const ticks = adjusted / mintick;
+    const whole = direction === 1 ? Math.ceil(ticks - 1e-9) : Math.floor(ticks + 1e-9);
+    const decimals = Math.max(0, Math.ceil(-Math.log10(mintick) - 1e-9));
+    return Number((whole * mintick).toFixed(Math.min(12, decimals)));
 }
 
 /**
@@ -2886,6 +2893,7 @@ export function initializeStrategy(context: any, config: any): void {
         initial_capital: 1000000,
         currency: 'USD',
         slippage: 0,
+        slippage_percent: 0,
         commission_type: 'percent',
         commission_value: 0,
         margin_long: 100,
@@ -3095,11 +3103,14 @@ export function applyExternalStrategyFill(context: any, fill: StrategyExternalFi
     if (!strategy) return { applied: false, reason: 'no_strategy', events: [] };
     // The external price is already the executed price: no synthetic slippage.
     const savedSlippage = strategy.config.slippage;
+    const savedPercent = strategy.config.slippage_percent;
     strategy.config.slippage = 0;
+    strategy.config.slippage_percent = 0;
     try {
         return applyExternalStrategyFillAtPrice(context, strategy, fill);
     } finally {
         strategy.config.slippage = savedSlippage;
+        strategy.config.slippage_percent = savedPercent;
     }
 }
 

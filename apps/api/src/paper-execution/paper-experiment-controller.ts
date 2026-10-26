@@ -104,6 +104,8 @@ interface ManagedExperiment {
   stopRequested: boolean;
   terminalStatus: 'completed' | 'interrupted';
   terminalReason: string | null;
+  /** A system stop's reason (memory guard) that the runtime keeps in its final reason. */
+  systemStopReason: string | null;
   snapshot: PaperExperimentSnapshot | null;
   startFailed: boolean;
   startPromise: Promise<PaperExperimentRuntimeHandle> | null;
@@ -355,6 +357,7 @@ export class PaperExperimentControllerV1 {
       stopRequested: false,
       terminalStatus: 'completed',
       terminalReason: null,
+      systemStopReason: null,
       snapshot: null,
       startFailed: false,
       startPromise: null,
@@ -389,7 +392,13 @@ export class PaperExperimentControllerV1 {
     }
   }
 
-  async stop(id: string): Promise<PaperExperimentDetail> {
+  /** Runs this engine is running now and nobody has asked to stop. */
+  runningIds(): string[] {
+    return [...this.#managed].filter(([, managed]) => managed.handle && !managed.stopRequested).map(([id]) => id);
+  }
+
+  /** `systemReason`: the system, not the owner, stops the run (memory guard); it is not resumed. */
+  async stop(id: string, systemReason?: string): Promise<PaperExperimentDetail> {
     const experiment = this.get(id);
     if (!experiment) throw new PaperExperimentControllerError('NOT_FOUND', 'Paper experiment not found.');
     if (experiment.status === 'completed' || experiment.status === 'interrupted') return experiment;
@@ -399,6 +408,10 @@ export class PaperExperimentControllerV1 {
     }
     managed.stopRequested = true;
     managed.terminalStatus = 'interrupted';
+    if (systemReason) {
+      managed.terminalReason ??= systemReason;
+      managed.systemStopReason ??= systemReason;
+    }
     managed.terminalReason ??= USER_STOP_REASON;
     if (!managed.handle) {
       if (managed.startFailed) return this.#abortFailedStart(id, managed);
@@ -507,7 +520,8 @@ export class PaperExperimentControllerV1 {
     managed.stopPromise = (async () => {
       this.#store!.setStatus(id, 'stopping', managed.terminalReason);
       try {
-        const proof = await managed.handle!.stop(managed.terminalReason === SERVER_SHUTDOWN_REASON ? SERVER_SHUTDOWN_REASON : undefined);
+        const proof = await managed.handle!.stop(managed.terminalReason === SERVER_SHUTDOWN_REASON ? SERVER_SHUTDOWN_REASON
+          : managed.systemStopReason ?? undefined);
         if (!proof || proof.controlSlotReleaseProven !== true
           || (proof.outcome === 'completed' && (proof.finalVenueDrainProven !== true || proof.reason !== null))
           || (proof.outcome === 'interrupted'
@@ -517,8 +531,9 @@ export class PaperExperimentControllerV1 {
         }
         if (proof.outcome === 'interrupted') {
           managed.terminalStatus = 'interrupted';
+          // The runtime's reason may extend a system reason with the LIVE closes' outcome.
           if (!managed.terminalReason || managed.terminalReason === USER_STOP_REASON
-            || (managed.terminalReason === SERVER_SHUTDOWN_REASON && proof.reason.startsWith(SERVER_SHUTDOWN_REASON))) {
+            || proof.reason.startsWith(managed.terminalReason)) {
             managed.terminalReason = proof.reason;
           } else if (!managed.terminalReason.includes(proof.reason)) {
             managed.terminalReason += `; ${proof.reason}`;

@@ -16,7 +16,7 @@ try {
       initialCapital: 100_000, baseCurrency: 'USDT',
       defaultOrderSizeValue: 0.01, defaultOrderSizeType: 'fixed', pyramiding: 1,
       feeModel: 'manual', commissionType: 'percent', commissionValue: 0.045,
-      slippageTicks: 0,
+      slippagePercent: 0,
     },
   });
   if (reply.statusCode !== 200) throw new Error(`Backtest failed: HTTP ${reply.statusCode} ${reply.body}`);

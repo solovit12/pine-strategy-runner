@@ -25,6 +25,8 @@ export interface StrategyConfig {
     initial_capital?: number;
     currency?: string;
     slippage?: number;
+    /** Pine Strategy Runner: percent of the price, on top of `slippage` ticks. */
+    slippage_percent?: number;
     commission_type?: string;
     commission_value?: number;
     process_orders_on_close?: boolean;

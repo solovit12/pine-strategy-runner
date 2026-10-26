@@ -9,7 +9,7 @@ const settings = normalizedBacktestSettings({
   dateRange: { start: '2026-09-10', end: '2026-09-23' },
   initialCapital: 5000, baseCurrency: 'USDT', defaultOrderSizeValue: 10,
   defaultOrderSizeType: 'percent_of_equity', pyramiding: 1, feeModel: 'manual',
-  commissionType: 'percent', commissionValue: 0, slippageTicks: 0,
+  commissionType: 'percent', commissionValue: 0, slippagePercent: 0,
   barDetailization: 'default',
 }, source);
 

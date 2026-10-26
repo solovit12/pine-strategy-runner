@@ -381,7 +381,7 @@ if bar_index == 0
         pyramiding: 1,
         commissionType: 'percent',
         commissionValue: 0,
-        slippageTicks: 0,
+        slippagePercent: 0,
       },
     };
 

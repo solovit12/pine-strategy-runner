@@ -33,6 +33,9 @@ export const DefaultOrderSizeTypeSchema = z.enum(['fixed', 'cash', 'percent_of_e
 export const CommissionTypeSchema = z.enum(['percent', 'cash_per_contract', 'cash_per_order']);
 export const BacktestFeeModelSchema = z.enum(['venue_default_all_taker_v1', 'manual']);
 export const BarDetailizationSchema = z.enum(['default', 'high']);
+/** Default execution cost of a market or stop fill: owner's measurement of Paper against backtests (2026-10-26). */
+export const DEFAULT_SLIPPAGE_PERCENT = 0.2;
+
 export const BacktestTimeframeSchema = z.enum(['1m', '5m', '15m', '30m', '1h', '4h', '1d', '1w']);
 
 export type BacktestTimeframe = z.infer<typeof BacktestTimeframeSchema>;
@@ -77,7 +80,8 @@ const BacktestRequestInputSchema = z.object({
   commissionValue: z.number().finite().min(0).max(1_000_000_000_000),
   marginLongPercent: z.number().finite().min(0).max(100).optional(),
   marginShortPercent: z.number().finite().min(0).max(100).optional(),
-  slippageTicks: z.number().int().min(0).max(1_000_000),
+  /** Every market and stop fill this much worse (percent of the price); 0 matches TradingView. */
+  slippagePercent: z.number().finite().min(0).max(10).default(DEFAULT_SLIPPAGE_PERCENT),
   barDetailization: BarDetailizationSchema.optional(),
   calcOnOrderFills: z.literal(false).default(false),
   calcOnEveryTick: z.literal(false).default(false),
@@ -315,7 +319,7 @@ export interface BacktestResponse {
     pineVersion: 5 | 6 | null;
     marginLongPercent: number;
     marginShortPercent: number;
-    slippageTicks: number;
+    slippagePercent: number;
     barDetailization: 'default' | 'high';
     executionModelVersion: 'default-v2' | 'minute-replay-v1';
     chartTimeframe: BacktestTimeframe;
@@ -357,7 +361,7 @@ export interface PresetResponse {
     liquidityAssumption: 'uniform_manual';
     commissionType: 'percent';
     commissionValue: null;
-    slippageTicks: number;
+    slippagePercent: number;
     timezone: 'UTC';
   };
 }
@@ -386,7 +390,7 @@ export interface WorkerRequest {
     commissionValue: number;
     marginLongPercent?: number;
     marginShortPercent?: number;
-    slippageTicks: number;
+    slippagePercent: number;
     processOrdersOnClose?: boolean;
   };
 }
@@ -408,7 +412,7 @@ export interface WorkerSuccess {
     pyramiding: number;
     commissionType: 'percent' | 'cash_per_contract' | 'cash_per_order';
     commissionValue: number;
-    slippageTicks: number;
+    slippagePercent: number;
     processOrdersOnClose: boolean;
     legacyMarginDefaultsApplied: boolean;
   };

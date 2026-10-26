@@ -26,7 +26,7 @@ const backtestSettings = {
   feeModel: 'manual',
   commissionType: 'percent',
   commissionValue: 0,
-  slippageTicks: 0,
+  slippagePercent: 0,
 };
 
 const paperSettings = {

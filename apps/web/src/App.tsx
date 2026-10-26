@@ -1,7 +1,7 @@
 import Editor, { type OnMount } from '@monaco-editor/react';
 import { AlertTriangle, Play, Settings2, ShieldCheck, Square } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
-import { PINETS_VERSION, type BacktestRequest, type BacktestResponse, type BacktestTimeframe, type PresetResponse } from '../../../packages/shared/src/contracts';
+import { DEFAULT_SLIPPAGE_PERCENT, PINETS_VERSION, type BacktestRequest, type BacktestResponse, type BacktestTimeframe, type PresetResponse } from '../../../packages/shared/src/contracts';
 import { PYTHON_STRATEGY_SOURCE_PREFIX, pythonStrategyRef, type PaperStrategySettings, type StrategyDetail, type StrategySummary } from '../../../packages/shared/src/strategy-catalog-contracts';
 import { BinanceMarketSelector } from './components/BinanceMarketSelector';
 import { Metrics } from './components/Metrics';
@@ -51,7 +51,7 @@ type EditorSnapshot = {
   commissionValueInput: string;
   longLeverage: string;
   shortLeverage: string;
-  slippageTicks: number;
+  slippagePercent: number;
   processOrdersOnClose: boolean;
   barDetail: BarDetail;
   strategyName: string;
@@ -190,7 +190,7 @@ export function App() {
   const [commissionValueInput, setCommissionValueInput] = useState('');
   const [longLeverage, setLongLeverage] = useState('Auto');
   const [shortLeverage, setShortLeverage] = useState('Auto');
-  const [slippageTicks, setSlippageTicks] = useState(0);
+  const [slippagePercent, setSlippagePercent] = useState(DEFAULT_SLIPPAGE_PERCENT);
   const [processOrdersOnClose, setProcessOrdersOnClose] = useState(false);
   const [barDetail, setBarDetail] = useState<BarDetail>('high');
   const [result, setResult] = useState<BacktestResponse | null>(null);
@@ -236,7 +236,7 @@ export function App() {
       setDefaultOrderSizeValue(loaded.configuration.defaultOrderSizeValue);
       setDefaultOrderSizeType(loaded.configuration.defaultOrderSizeType);
       setPyramiding(loaded.configuration.pyramiding);
-      setSlippageTicks(loaded.configuration.slippageTicks);
+      setSlippagePercent(loaded.configuration.slippagePercent ?? DEFAULT_SLIPPAGE_PERCENT);
       setProcessOrdersOnClose(strategyDeclarationProperties(loaded.source).processOrdersOnClose ?? false);
       const draft = readEditorDraft();
       if (draft) restoreEditorDraft(draft, loaded.source);
@@ -253,12 +253,12 @@ export function App() {
     if (!draftRestored.current) return;
     const timer = window.setTimeout(() => writeEditorDraft({
       source, symbol, timeframe, startDate, endDate, initialCapital, defaultOrderSizeValue, defaultOrderSizeType,
-      pyramiding, commissionValueInput, longLeverage, shortLeverage, slippageTicks, processOrdersOnClose, barDetail, strategyName,
+      pyramiding, commissionValueInput, longLeverage, shortLeverage, slippagePercent, processOrdersOnClose, barDetail, strategyName,
       strategyId: loadedStrategy?.strategy.id ?? null,
     }), 300);
     return () => window.clearTimeout(timer);
   }, [source, symbol, timeframe, startDate, endDate, initialCapital, defaultOrderSizeValue, defaultOrderSizeType, pyramiding,
-    commissionValueInput, longLeverage, shortLeverage, slippageTicks, processOrdersOnClose, barDetail, strategyName, loadedStrategy, state]);
+    commissionValueInput, longLeverage, shortLeverage, slippagePercent, processOrdersOnClose, barDetail, strategyName, loadedStrategy, state]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -371,8 +371,8 @@ export function App() {
               ? bilingual('Pyramiding must be a whole number from 0 to 100.', 'Пирамидинг должен быть целым числом от 0 до 100.')
               : !/^\d+(?:\.\d+)?$/.test(normalizedCommission) || !Number.isFinite(commissionValue) || commissionValue < 0 || commissionValue > 100
                 ? bilingual('Enter commission as a percentage from 0 to 100. Zero means no commission.', 'Укажите комиссию в процентах от 0 до 100. Ноль означает отсутствие комиссии.')
-                : !Number.isInteger(slippageTicks) || slippageTicks < 0
-                  ? bilingual('Slippage must be a whole number of ticks starting from zero.', 'Проскальзывание должно быть целым числом тиков от нуля.')
+                : !Number.isFinite(slippagePercent) || slippagePercent < 0 || slippagePercent > 10
+                  ? bilingual('Execution cost per fill must be a percentage from 0 to 10.', 'Стоимость исполнения должна быть в процентах от 0 до 10.')
                   : '';
     if (validationError) {
       throw new Error(validationError);
@@ -383,7 +383,7 @@ export function App() {
       dateRange: { start: startDate, end: endDate },
       initialCapital, baseCurrency: 'USDT', defaultOrderSizeValue, defaultOrderSizeType, pyramiding,
       feeModel: 'manual',
-      commissionType: 'percent', commissionValue, marginLongPercent, marginShortPercent, slippageTicks,
+      commissionType: 'percent', commissionValue, marginLongPercent, marginShortPercent, slippagePercent,
       barDetailization, calcOnOrderFills: false, calcOnEveryTick: false,
       calcOnEveryHistoryTick: false, limitOrderVerificationTicks: 0, processOrdersOnClose,
     };
@@ -466,7 +466,7 @@ export function App() {
     setCommissionValueInput(String(settings.commissionValue));
     setLongLeverage(settings.marginLongPercent === undefined ? 'Auto' : formatLeverage(settings.marginLongPercent));
     setShortLeverage(settings.marginShortPercent === undefined ? 'Auto' : formatLeverage(settings.marginShortPercent));
-    setSlippageTicks(settings.slippageTicks);
+    setSlippagePercent(settings.slippagePercent ?? DEFAULT_SLIPPAGE_PERCENT);
     setProcessOrdersOnClose(settings.processOrdersOnClose ?? strategyDeclarationProperties(detail.version.source).processOrdersOnClose ?? false);
     setBarDetail(settings.timeframe !== '1m' && settings.barDetailization === 'default' ? 'default' : 'high');
     setResult(null);
@@ -489,7 +489,7 @@ export function App() {
     setCommissionValueInput(draft.commissionValueInput);
     setLongLeverage(draft.longLeverage);
     setShortLeverage(draft.shortLeverage);
-    setSlippageTicks(draft.slippageTicks);
+    setSlippagePercent(draft.slippagePercent ?? DEFAULT_SLIPPAGE_PERCENT);
     setProcessOrdersOnClose(draft.processOrdersOnClose);
     setBarDetail(draft.barDetail ?? 'high');
     setStrategyName(draft.strategyName);
@@ -521,7 +521,7 @@ export function App() {
     setCommissionValueInput(previousEditor.commissionValueInput);
     setLongLeverage(previousEditor.longLeverage);
     setShortLeverage(previousEditor.shortLeverage);
-    setSlippageTicks(previousEditor.slippageTicks);
+    setSlippagePercent(previousEditor.slippagePercent);
     setProcessOrdersOnClose(previousEditor.processOrdersOnClose);
     setBarDetail(previousEditor.barDetail);
     setStrategyName(previousEditor.strategyName);
@@ -560,7 +560,7 @@ export function App() {
     const snapshot: EditorSnapshot = {
       source, symbol, timeframe, startDate, endDate, initialCapital,
       defaultOrderSizeValue, defaultOrderSizeType, pyramiding, commissionValueInput,
-      longLeverage, shortLeverage, slippageTicks, processOrdersOnClose, barDetail, strategyName, selectedStrategyId,
+      longLeverage, shortLeverage, slippagePercent, processOrdersOnClose, barDetail, strategyName, selectedStrategyId,
       loadedStrategy, paperStrategy, result, lastBacktestedRequest, state, error,
     };
     setPreviousEditors((items) => [...items, snapshot].slice(-3));
@@ -847,7 +847,7 @@ export function App() {
               <label><span>Commission per Fill, % <InfoTooltip label="commission" en="Enter your commission using a dot or comma. It is charged separately on entry and exit; 0% means no commission." ru="Укажите свою комиссию через точку или запятую. Она начисляется отдельно на вход и выход; 0% означает отсутствие комиссии." /></span><div className="input-suffix"><input type="text" inputMode="decimal" value={commissionValueInput} onChange={(event) => setCommissionValueInput(event.target.value)} disabled={state === 'running'} placeholder="Enter %" required /><span>%</span></div></label>
               <label><span>Long Leverage <InfoTooltip label="long leverage" en="Auto reads margin_long from the Pine code." ru="Auto берёт margin_long из Pine-кода." /></span><input value={longLeverage} onChange={(event) => setLongLeverage(event.target.value)} placeholder="Auto / Infinity / 20" disabled={state === 'running'} /></label>
               <label><span>Short Leverage <InfoTooltip label="short leverage" en="20 means 5% margin; Infinity means 0%." ru="20 означает маржу 5%; Infinity означает 0%." /></span><input value={shortLeverage} onChange={(event) => setShortLeverage(event.target.value)} placeholder="Auto / Infinity / 20" disabled={state === 'running'} /></label>
-              <label><span>Slippage <InfoTooltip label="slippage" en="Price worsening applied to market and stop orders." ru="Ухудшение цены для рыночных и стоп-заявок." /></span><div className="input-suffix"><input type="number" min="0" step="1" value={slippageTicks} onChange={(event) => setSlippageTicks(Number(event.target.value))} disabled={state === 'running'} /><span>ticks</span></div></label>
+              <label><span>Execution Cost per Fill <InfoTooltip label="execution cost per fill" en="How much worse than its price every market or stop fill is, in percent of the price. Real exchanges fill like this because of the spread, the order's delay and slippage. Applies to market and stop entries (a buy fills this much higher, a sell this much lower) and to stop-losses, trailing stops and market exits (also this much worse). Limit orders and take-profits fill exactly at their price, as on an exchange and in TradingView. The default 0.2 % is what our Paper runs on Lighter and Hyperliquid cost per fill compared with backtests of the same days. To match TradingView, set 0: slippage in ticks from the script's strategy(...) is not used." ru="Насколько хуже своей цены исполняется каждая заявка по рынку или по стопу, в процентах от цены. На настоящей бирже так и бывает из-за спреда, задержки заявки и проскальзывания. Касается входов по рынку и стоп-входов (покупка исполняется на столько дороже, продажа — дешевле), а также стоп-лоссов, трейлинг-стопов и выходов по рынку (тоже на столько хуже). Лимитные заявки и тейк-профиты исполняются ровно по своей цене — как на бирже и в TradingView. 0,2 % по умолчанию — столько в среднем стоило исполнение в наших Paper-тестах на Lighter и Hyperliquid по сравнению с бэктестом тех же дней. Чтобы результат совпал с TradingView, поставьте 0: проскальзывание в тиках из strategy(...) скрипта не используется." /></span><div className="input-suffix"><input type="number" min="0" max="10" step="0.01" value={slippagePercent} onChange={(event) => setSlippagePercent(Number(event.target.value))} disabled={state === 'running'} /><span>%</span></div></label>
               <label><span>Bar Detail <InfoTooltip label="bar detail" en="How orders are checked inside each candle. Every minute: stops, take-profits and limits are checked on every one-minute candle inside it, the most accurate model. 4 points per bar: only open, high, low and close, in the order open → nearer extreme → farther extreme → close. This repeats TradingView's Default bar detailization on a free account (no Bar Magnifier); use it to compare with TradingView. On 1m there are no smaller candles, so 4 points is the only model." ru="Как проверяются заявки внутри каждой свечи. Every minute: стопы, тейки и лимитные заявки проверяются по каждой минутной свече внутри неё — самая точная модель. 4 points per bar: только открытие, максимум, минимум и закрытие в порядке открытие → ближний экстремум → дальний → закрытие. Это повторяет детализацию Default в TradingView на бесплатном аккаунте (без Bar Magnifier); удобно для сверки с TradingView. На 1m меньших свечей нет, поэтому там только 4 точки." /></span><select value={timeframe === '1m' ? 'default' : barDetail} onChange={(event) => setBarDetail(event.target.value as BarDetail)} disabled={state === 'running' || timeframe === '1m'}><option value="high">Every minute (most accurate)</option><option value="default">4 points per bar — as TradingView free (Default)</option></select></label>
               <label className="property-checkbox"><input type="checkbox" checked={processOrdersOnClose} onChange={(event) => setProcessOrdersOnClose(event.target.checked)} disabled={state === 'running'} /><span>Fill Orders on Bar Close <InfoTooltip label="fill orders on bar close" en="Like TradingView's Properties → Fill orders: On bar close. Market orders fill at the close of the candle that placed them instead of the next candle's open. Starts from process_orders_on_close in the script's strategy(...)." ru="Как в TradingView: Properties → Fill orders: On bar close. Рыночные заявки исполняются по закрытию свечи, на которой они выставлены, а не на открытии следующей. Начальное значение берётся из process_orders_on_close в strategy(...) скрипта." /></span></label>
             </div>

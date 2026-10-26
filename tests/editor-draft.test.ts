@@ -4,7 +4,7 @@ import { readEditorDraft, readPaperDraft, writeEditorDraft, writePaperDraft, typ
 const editor: EditorDraft = {
   source: '//@version=6\nstrategy("Mine")', symbol: 'ETHUSDT', timeframe: '15m', startDate: '2026-09-01', endDate: '2026-10-01',
   initialCapital: 5000, defaultOrderSizeValue: 2, defaultOrderSizeType: 'percent_of_equity', pyramiding: 3,
-  commissionValueInput: '0.05', longLeverage: '5×', shortLeverage: 'Auto', slippageTicks: 1, processOrdersOnClose: true,
+  commissionValueInput: '0.05', longLeverage: '5×', shortLeverage: 'Auto', slippagePercent: 0.1, processOrdersOnClose: true,
   strategyName: 'Mine', strategyId: 'strategy-1',
 };
 const paper: PaperDraft = {

@@ -58,7 +58,7 @@ const backtestSettings = {
   dateRange: { start: '2026-09-01', end: '2026-09-07' },
   initialCapital: 10_000, baseCurrency: 'USDT', defaultOrderSizeValue: 0.01,
   defaultOrderSizeType: 'fixed', pyramiding: 0, feeModel: 'manual',
-  commissionType: 'percent', commissionValue: 0, slippageTicks: 0,
+  commissionType: 'percent', commissionValue: 0, slippagePercent: 0,
 };
 
 const directories: string[] = [];

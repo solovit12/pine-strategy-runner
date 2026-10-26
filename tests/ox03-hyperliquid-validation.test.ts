@@ -133,7 +133,7 @@ function request(source: string, timeframe: BacktestTimeframe) {
     feeModel: 'venue_default_all_taker_v1',
     commissionType: 'percent',
     commissionValue: 0.045,
-    slippageTicks: 0,
+    slippagePercent: 0,
     barDetailization: timeframe === '1m' ? 'default' : 'high',
     calcOnOrderFills: false,
     calcOnEveryTick: false,

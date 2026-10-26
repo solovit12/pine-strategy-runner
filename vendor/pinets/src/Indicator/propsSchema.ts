@@ -113,6 +113,9 @@ export const STRATEGY_PROPS: IPineProp[] = [
     // 0..N — slippage in ticks applied against fill direction
     { name: 'slippage', type: 'int', defval: 0, minval: 0, mutable: true, appliesTo: 'strategy' },
 
+    // >= 0 — Pine Strategy Runner: percent of the price added against the fill direction, like `slippage`
+    { name: 'slippage_percent', type: 'float', defval: 0, minval: 0, mutable: true, appliesTo: 'strategy' },
+
     // 'percent' | 'cash_per_contract' | 'cash_per_order' — corresponds to strategy.commission.percent / .cash_per_contract / .cash_per_order
     { name: 'commission_type', type: 'enum', defval: 'percent',
       options: ['percent', 'cash_per_contract', 'cash_per_order'],

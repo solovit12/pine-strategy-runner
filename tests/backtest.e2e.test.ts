@@ -170,7 +170,7 @@ describe('0xArchive Hyperliquid HTTP vertical slice', () => {
         pyramiding: 1,
         commissionType: 'percent',
         commissionValue: 0.1,
-        slippageTicks: 0,
+        slippagePercent: 0,
         barDetailization: 'high',
       },
     });
@@ -230,6 +230,47 @@ describe('0xArchive Hyperliquid HTTP vertical slice', () => {
     expect(result.metrics.totalTrades).toBe(1);
   });
 
+  it('fills market and stop orders the execution cost worse, limits and take-profits at their price', async () => {
+    const run = async (source: string, slippagePercent: number) => {
+      const response = await app.inject({ method: 'POST', url: '/api/backtests', payload: {
+        source, exchange: 'Hyperliquid', marketType: 'Perpetual', symbol: 'BTC', timeframe: '1h', barIndexOffset: 0,
+        dateRange: { start: '2026-09-01', end: '2026-09-07' }, initialCapital: 100_000, baseCurrency: 'USDC',
+        defaultOrderSizeValue: 0.01, defaultOrderSizeType: 'fixed', pyramiding: 1, commissionType: 'percent', commissionValue: 0,
+        slippagePercent, barDetailization: 'high',
+      } });
+      expect(response.statusCode, response.body).toBe(200);
+      return response.json() as { trades: Array<{ entryPrice: number; exitPrice: number }>; configuration: { slippagePercent: number } };
+    };
+    const worse = (price: number, up: boolean) => Number(((up ? Math.ceil(price * 1.002 * 10 - 1e-9) : Math.floor(price * 0.998 * 10 + 1e-9)) / 10).toFixed(1));
+    // Market entry and market close: both 0.2 % worse, on the 0.1 tick.
+    const plain = await run(buyAndHold, 0);
+    const costed = await run(buyAndHold, 0.2);
+    expect(costed.configuration.slippagePercent).toBe(0.2);
+    expect(costed.trades[0]!.entryPrice).toBe(worse(plain.trades[0]!.entryPrice, true));
+    expect(costed.trades[0]!.exitPrice).toBe(worse(plain.trades[0]!.exitPrice, false));
+    // A take-profit limit fills at its own price either way.
+    const takeProfit = `//@version=6
+strategy("TP", overlay=true, default_qty_type=strategy.fixed, default_qty_value=0.01)
+var bool sent = false
+if not sent
+    strategy.entry("L", strategy.long)
+    sent := true
+strategy.exit("TP", "L", limit=109.0)
+`;
+    const tpPlain = await run(takeProfit, 0);
+    const tpCosted = await run(takeProfit, 0.2);
+    expect(tpPlain.trades[0]!.exitPrice).toBe(109);
+    expect(tpCosted.trades[0]!.exitPrice).toBe(109);
+    expect(tpCosted.trades[0]!.entryPrice).toBe(worse(tpPlain.trades[0]!.entryPrice, true));
+    // The default is 0.2 % when the request leaves it out.
+    const defaulted = await app.inject({ method: 'POST', url: '/api/backtests', payload: {
+      source: buyAndHold, exchange: 'Hyperliquid', marketType: 'Perpetual', symbol: 'BTC', timeframe: '1h', barIndexOffset: 0,
+      dateRange: { start: '2026-09-01', end: '2026-09-07' }, initialCapital: 100_000, baseCurrency: 'USDC',
+      defaultOrderSizeValue: 0.01, defaultOrderSizeType: 'fixed', pyramiding: 1, commissionType: 'percent', commissionValue: 0,
+      barDetailization: 'high' } });
+    expect(defaulted.json().configuration.slippagePercent).toBe(0.2);
+  });
+
   it('fails closed when one required minute is absent', async () => {
     const missingAt = Date.parse('2026-09-01T00:30:00.000Z');
     const brokenApp = await buildApp({
@@ -255,7 +296,7 @@ describe('0xArchive Hyperliquid HTTP vertical slice', () => {
           pyramiding: 1,
           commissionType: 'percent',
           commissionValue: 0.1,
-          slippageTicks: 0,
+          slippagePercent: 0,
           barDetailization: 'high',
         },
       });
@@ -292,7 +333,7 @@ describe('0xArchive Hyperliquid HTTP vertical slice', () => {
           pyramiding: 1,
           commissionType: 'percent',
           commissionValue: 0.1,
-          slippageTicks: 0,
+          slippagePercent: 0,
           barDetailization: 'high',
         },
       });
@@ -354,7 +395,7 @@ describe('0xArchive Hyperliquid HTTP vertical slice', () => {
         pyramiding: 1,
         commissionType: 'percent',
         commissionValue: 0.1,
-        slippageTicks: 0,
+        slippagePercent: 0,
       },
     });
     expect(response.statusCode).toBe(400);

@@ -156,7 +156,7 @@ rules and costs?* It does not predict future profit.
 | From / To | UTC dates. *From* starts at 00:00 UTC, *To* is included whole. No hidden warm-up: an SMA of 200 has no full value on the first 199 bars. |
 | Initial capital, order size, pyramiding | Override the values in `strategy(...)`, like TradingView's *Properties* tab. Order size: fixed quantity, cash amount or percent of equity. |
 | Commission | Percent per fill, charged on entry and again on exit. You enter it explicitly. |
-| Slippage | A number of ticks applied to market and stop fills. |
+| Execution cost per fill | Percent of the price by which every market and stop fill is worse (entries at market or on a stop, stop-losses, trailing stops, market exits); limits and take-profits fill at their price. Default 0.2 %, what real fills cost in our Paper tests compared with backtests of the same days. Set 0 to match TradingView. |
 | Long / short leverage | Becomes Pine's margin percent; *Auto* keeps the script's value. Liquidation is approximate. |
 | Bar detail | **Every minute** (default): stops, take-profits and limits are checked on every 1-minute candle inside the bar. **4 points per bar**: only open, high, low and close, as TradingView's default on a free account — use it to reproduce TradingView's numbers. |
 
@@ -562,7 +562,7 @@ Hyperliquid: the address must be the **main** account, and the API wallet must b
 Hyperliquid (More → API).
 
 **Results differ from TradingView.** Use *4 points per bar*, the same Binance market
-(`BINANCE:BTCUSDT.P`), the same dates and commission; then see the compatibility page for features
+(`BINANCE:BTCUSDT.P`), the same dates and commission, *Execution cost per fill* 0; then see the compatibility page for features
 that differ.
 
 **Is my key safe?** It never leaves your computer except as signatures on orders; see
@@ -605,6 +605,8 @@ above; the Docker image contains it). Useful settings:
 | `PSR_LIVE_SECRETS_DIR` | Where account keys are stored (default: next to the run history). |
 | `PSR_LIVE_DISABLED=1` | Switches LIVE off for this installation. |
 | `PSR_RESUME_AFTER_RESTART=0` | Do not restart runs after a shutdown. |
+| `PSR_RUN_MEMORY_LIMIT_MB` | Memory guard: a run whose engine grows over this many MB (default 2048) stops the ordinary way; LIVE closes its positions first. |
+| `PSR_MIN_FREE_MEMORY_MB` | Memory guard: when free memory drops under this many MB (default 1024), the largest run stops the same way. |
 | `BACKTEST_MAX_EXECUTION_MINUTES` | Backtest budget in minute candles (default 172 800 = 120 days). |
 
 Continuous integration (`.github/workflows`) builds the Nautilus wheel image and the app image

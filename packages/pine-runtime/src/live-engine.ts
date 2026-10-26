@@ -178,6 +178,7 @@ export async function runPineLive(input: PineLiveRunInput): Promise<PineLiveRunR
   indicator.prop.commission_value = execution.commissionValue;
   // Real fills carry their own price; synthetic slippage is meaningless here.
   indicator.prop.slippage = 0;
+  indicator.prop.slippage_percent = 0;
   const marginLong = execution.marginLongPercent ?? defaults.marginLongPercent;
   const marginShort = execution.marginShortPercent ?? defaults.marginShortPercent;
   if (marginLong !== undefined) indicator.prop.margin_long = marginLong;

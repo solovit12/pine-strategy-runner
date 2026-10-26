@@ -20,6 +20,7 @@ import { BinanceFuturesHistoricalProvider } from '../../../packages/market-data/
 import { assertHighRunConfiguration, HighSafetyError } from '../../../packages/pine-runtime/src/high-safety.js';
 import {
   BACKTEST_TIMEFRAME_MS,
+  DEFAULT_SLIPPAGE_PERCENT,
   PINE_TIMEFRAME,
   PINETS_VERSION,
   type BacktestResponse,
@@ -35,6 +36,7 @@ import { pineCodeError } from '../../../packages/pine-runtime/src/pine-errors.js
 import { pineCompatibility } from '../../../packages/pine-runtime/src/pine-compatibility.js';
 import { forecastRun, runLoadPlan } from '../../../packages/shared/src/exchange-load.js';
 import { activeRunsFrom, ExchangeLoadMonitor } from './paper-execution/exchange-load.js';
+import { MemoryGuard } from './paper-execution/memory-guard.js';
 import {
   HYPERLIQUID_BASE_PERPETUAL_FEES,
   feeRateFractionToPercent,
@@ -341,6 +343,18 @@ export async function buildApp(options: BuildAppOptions = {}) {
     if (paperRuntimeFactory) exchangeLoad.start();
     app.addHook('onClose', async () => exchangeLoad?.stop());
   }
+  // A run that grows too large stops the ordinary way (LIVE closes its positions) before the
+  // system kills the engine with no chance to close anything.
+  if (paperExperiments && paperRuntimeFactory) {
+    const memoryGuard = new MemoryGuard({
+      activeRunIds: () => paperExperiments.runningIds(),
+      stopRun: (id, reason) => paperExperiments.stop(id, reason),
+      runsDir: paperRunsDir ?? path.join(projectRoot, '.local', 'paper-runs'),
+      log: (message) => app.log.warn(message),
+    });
+    memoryGuard.start();
+    app.addHook('onClose', async () => memoryGuard.stop());
+  }
   if (paperExperiments) busyLiveAccounts = () => paperExperiments.busyLiveAccounts();
   app.addHook('onClose', async () => { await paperExperiments?.close(); strategyCatalog?.close(); });
   // Runs the system stopped for a server shutdown start again once this engine is up.
@@ -438,7 +452,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
         liquidityAssumption: 'uniform_manual',
         commissionType: 'percent',
         commissionValue: null,
-        slippageTicks: 0,
+        slippagePercent: DEFAULT_SLIPPAGE_PERCENT,
         timezone: 'UTC',
       },
     };
@@ -902,7 +916,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
         commissionValue: effectiveCommissionValue,
         marginLongPercent: parsed.data.marginLongPercent,
         marginShortPercent: parsed.data.marginShortPercent,
-        slippageTicks: parsed.data.slippageTicks,
+        slippagePercent: parsed.data.slippagePercent,
         processOrdersOnClose: parsed.data.processOrdersOnClose,
       },
     }, abortController.signal, {
@@ -1006,7 +1020,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
         pineVersion: workerResult.execution.pineVersion,
         marginLongPercent: workerResult.execution.marginLongPercent,
         marginShortPercent: workerResult.execution.marginShortPercent,
-        slippageTicks: workerResult.execution.slippageTicks,
+        slippagePercent: workerResult.execution.slippagePercent,
         barDetailization: parsed.data.barDetailization,
         executionModelVersion: highDetailization ? 'minute-replay-v1' : 'default-v2',
         chartTimeframe: parsed.data.timeframe,

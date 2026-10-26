@@ -11,7 +11,7 @@
     "initialCapital": 100000,
     "defaultOrderSizeContracts": 0.01,
     "commissionPercent": 0.1,
-    "slippageTicks": 0,
+    "slippagePercent": 0,
     "scriptExecution": "On bar close",
     "orderExecutionDelay": "One tick",
     "strategyWindow": {

@@ -65,7 +65,7 @@ if time >= END_TIME and strategy.position_size != 0
         pyramiding: 1,
         commissionType: 'percent',
         commissionValue: 0,
-        slippageTicks: 0,
+        slippagePercent: 0,
       },
     });
 

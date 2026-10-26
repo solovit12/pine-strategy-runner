@@ -26,7 +26,7 @@ const backtestSettings = {
   dateRange: { start: '2026-09-01', end: '2026-09-07' },
   initialCapital: 10_000, baseCurrency: 'USDT', defaultOrderSizeValue: 10,
   defaultOrderSizeType: 'percent_of_equity', pyramiding: 1, feeModel: 'manual',
-  commissionType: 'percent', commissionValue: 0.045, slippageTicks: 0,
+  commissionType: 'percent', commissionValue: 0.045, slippagePercent: 0,
 };
 const stopProof = {
   outcome: 'interrupted', controlSlotReleaseProven: true, finalVenueDrainProven: false, reason: 'Stopped.',

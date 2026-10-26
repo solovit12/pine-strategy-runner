@@ -116,7 +116,9 @@ process.on('message', async (message: WorkerRequest | SeriesResponseMessage) => 
     strategy.prop.pyramiding = message.execution.pyramiding;
     strategy.prop.commission_type = message.execution.commissionType;
     strategy.prop.commission_value = message.execution.commissionValue;
-    strategy.prop.slippage = message.execution.slippageTicks;
+    // The form's percent replaces the script's own slippage ticks.
+    strategy.prop.slippage = 0;
+    strategy.prop.slippage_percent = message.execution.slippagePercent;
     const appliedLegacyLongMargin = message.execution.marginLongPercent === undefined && defaults.marginLongPercent !== undefined;
     const appliedLegacyShortMargin = message.execution.marginShortPercent === undefined && defaults.marginShortPercent !== undefined;
     if (message.execution.marginLongPercent !== undefined) strategy.prop.margin_long = message.execution.marginLongPercent;
@@ -160,7 +162,7 @@ process.on('message', async (message: WorkerRequest | SeriesResponseMessage) => 
         pyramiding: Number(strategy.prop.pyramiding),
         commissionType: strategy.prop.commission_type as 'percent' | 'cash_per_contract' | 'cash_per_order',
         commissionValue: Number(strategy.prop.commission_value),
-        slippageTicks: Number(strategy.prop.slippage),
+        slippagePercent: Number(strategy.prop.slippage_percent),
         processOrdersOnClose: strategy.prop.process_orders_on_close === true,
         legacyMarginDefaultsApplied: appliedLegacyLongMargin || appliedLegacyShortMargin,
       },

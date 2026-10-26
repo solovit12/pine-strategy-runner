@@ -131,7 +131,7 @@ if bar_index == 0
       pyramiding: 1,
       commissionType: 'percent',
       commissionValue: 0.045,
-      slippageTicks: 1,
+      slippagePercent: 0.1,
     },
   }, undefined, { timeoutMs, memoryMb: workerMemoryMb });
   if (!result.ok) throw new Error(`${result.error.kind}: ${result.error.message}`);

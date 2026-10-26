@@ -56,7 +56,7 @@ const payload = {
   feeModel: 'manual',
   commissionType: 'percent',
   commissionValue: 0.045,
-  slippageTicks: 0,
+  slippagePercent: 0,
 };
 const request = () => fetch(`${baseUrl}/api/backtests`, {
   method: 'POST',

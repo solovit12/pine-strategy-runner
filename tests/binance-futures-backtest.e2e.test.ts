@@ -134,7 +134,7 @@ function payload(commissionValue: number) {
     feeModel: 'manual',
     commissionType: 'percent',
     commissionValue,
-    slippageTicks: 0,
+    slippagePercent: 0,
     barDetailization: 'high',
   };
 }

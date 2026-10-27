@@ -192,9 +192,9 @@ export class LiveSettingsStore {
     this.#ensureDirectories();
     const file = this.#keyFile(account);
     const lines = account.exchange === 'lighter'
-      ? ['# Lighter API key for Live trading, written by Pine Strategy Runner. Keep this file private.',
+      ? ['# Lighter API key for Live trading, written by Svit Runner. Keep this file private.',
         `LIGHTER_ACCOUNT_INDEX=${account.accountIndex}`, `LIGHTER_API_KEY_INDEX=${account.apiKeyIndex}`, `LIGHTER_API_SECRET=${key}`]
-      : ['# Hyperliquid API wallet for Live trading, written by Pine Strategy Runner. Keep this file private.',
+      : ['# Hyperliquid API wallet for Live trading, written by Svit Runner. Keep this file private.',
         `HYPERLIQUID_ACCOUNT_ADDRESS=${account.accountAddress}`, `HYPERLIQUID_PK=${key}`];
     writeFileSync(`${file}.tmp`, [...lines, ''].join('\n'), { mode: 0o600 });
     chmodSync(`${file}.tmp`, 0o600);

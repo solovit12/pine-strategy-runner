@@ -1,4 +1,4 @@
-"""Public strategy API of Pine Strategy Runner.
+"""Public strategy API of Svit Runner.
 
 A strategy is a Python class. It receives closed bars, live best bid/ask and
 its own fills, and places orders through `ctx`. The order model mirrors Pine

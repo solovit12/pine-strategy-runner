@@ -12,13 +12,13 @@ function errorText(reason: unknown): string {
 }
 
 /** Where the key lives and what it can do: shown above the key field. */
-export const LIVE_KEY_PRIVACY_NOTE = 'Your API key is stored only on the machine that runs Pine Strategy Runner (your computer in the '
+export const LIVE_KEY_PRIVACY_NOTE = 'Your API key is stored only on the machine that runs Svit Runner (your computer in the '
   + 'Docker version), in the app\'s data folder, readable by the app only. It is never shown again and never sent to us or '
   + 'anyone else: the app signs your orders with it and sends only the signed orders to Lighter. A Lighter API key can '
   + 'trade and can withdraw only back to your own wallet; it cannot send funds to another address. Use a separate Lighter '
   + 'account with a small balance.';
 
-export const HYPERLIQUID_KEY_PRIVACY_NOTE = 'The API wallet key is stored only on the machine that runs Pine Strategy Runner, '
+export const HYPERLIQUID_KEY_PRIVACY_NOTE = 'The API wallet key is stored only on the machine that runs Svit Runner, '
   + 'in the app\'s data folder, readable by the app only. It is never shown again and never sent to us or anyone else: the '
   + 'app signs your orders with it and sends only the signed orders to Hyperliquid. A Hyperliquid API wallet can trade for '
   + 'your account but cannot withdraw or transfer funds. Create it on Hyperliquid (More → API) and keep a small balance.';

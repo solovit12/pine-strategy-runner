@@ -1,6 +1,6 @@
 # Tests the code, builds the app image for amd64 and arm64 on native runners with the
 # published Nautilus wheel, runs the offline engine checks inside each image and
-# publishes ghcr.io/<owner>/pine-strategy-runner (latest, commit, and vX.Y.Z on tags).
+# publishes ghcr.io/<owner>/svit-runner (latest, commit, and vX.Y.Z on tags).
 name: Image
 
 on:
@@ -20,13 +20,14 @@ permissions:
   packages: write
 
 env:
-  IMAGE: ghcr.io/${{ github.repository }}
-  WHEEL_IMAGE: ghcr.io/${{ github.repository }}-nautilus
+  IMAGE: ghcr.io/${{ github.repository_owner }}/svit-runner
+  # The wheel image keeps the name it was first published under (before the rename to Svit Runner).
+  WHEEL_IMAGE: ghcr.io/${{ github.repository_owner }}/pine-strategy-runner-nautilus
 
 jobs:
   test:
     if: >-
-      github.repository == 'solovit12/pine-strategy-runner'
+      github.repository == 'solovit12/svit-runner'
       && (github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success')
     runs-on: ubuntu-24.04
     steps:

@@ -3,7 +3,7 @@
 # NAUTILUS_WHEEL=prebuilt reuses the published Nautilus wheel; source compiles it here.
 services:
   psr:
-    image: pine-strategy-runner:local
+    image: svit-runner:local
     build:
       context: .
       args:

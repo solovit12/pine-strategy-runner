@@ -1,5 +1,5 @@
 # syntax=docker/dockerfile:1.7
-# Pine Strategy Runner: site, backtests and Paper engine in one container.
+# Svit Runner: site, backtests and Paper engine in one container.
 # Users run the published image (compose.yaml). To build it yourself:
 #   docker compose -f compose.yaml -f compose.build.yaml up -d --build
 # The Nautilus wheel (pinned source + Hyperliquid fast-book patch) comes either from

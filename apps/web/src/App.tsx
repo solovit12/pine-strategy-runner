@@ -32,7 +32,7 @@ type AppPage = 'backtest' | 'paper-setup' | 'paper-runs' | 'accounts';
 /** Header status: busy Paper slots still mean Paper works; a site without its engine says so. */
 /** Tells the owner's private and public sites apart, in the header and the browser tab. */
 const EDITION_LABEL = EDITION === 'full' ? 'Private' : 'Public';
-if (typeof document !== 'undefined') document.title = `Pine Strategy Runner · ${EDITION_LABEL}`;
+if (typeof document !== 'undefined') document.title = `Svit Runner · ${EDITION_LABEL}`;
 
 export function paperModeLabel(health: ServerHealth): string {
   if (health.paper.configured) return 'BACKTEST + PAPER';
@@ -710,8 +710,8 @@ export function App() {
     <main className="app-shell">
       <header className="topbar">
         <div className="brand">
-          <div className="brand-mark"><span>P</span><i /></div>
-          <div><strong>PINE STRATEGY RUNNER</strong></div>
+          <div className="brand-mark"><span>S</span><i /></div>
+          <div><strong>SVIT RUNNER</strong></div>
           <span className={`edition-badge edition-${EDITION}`}>{EDITION_LABEL}</span>
         </div>
         <nav className="top-nav" aria-label="Main navigation">

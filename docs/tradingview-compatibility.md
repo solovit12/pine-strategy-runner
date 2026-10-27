@@ -1,6 +1,6 @@
 # TradingView compatibility
 
-Pine Strategy Runner runs Pine strategies with [PineTS](https://github.com/LuxAlgo/PineTS),
+Svit Runner runs Pine strategies with [PineTS](https://github.com/LuxAlgo/PineTS),
 an independent Pine engine (fork in `vendor/pinets`). It is not TradingView, so a
 strategy can behave differently. This page lists what is tested.
 

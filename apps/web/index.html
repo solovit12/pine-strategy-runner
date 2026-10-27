@@ -5,7 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="theme-color" content="#0a0d0f" />
     <meta name="description" content="Self-hosted execution layer for Pine strategies" />
-    <title>Pine Strategy Runner</title>
+    <title>Svit Runner</title>
   </head>
   <body>
     <div id="root"></div>
@@ -16,7 +16,7 @@
           if (!root || root.childElementCount > 0) return;
           const panel = document.createElement('pre');
           panel.style.cssText = 'margin:24px;padding:18px;color:#ff9b9c;background:#211314;border:1px solid #753638;white-space:pre-wrap;font:13px/1.5 Consolas,monospace';
-          panel.textContent = `Pine Strategy Runner failed to start. / Pine Strategy Runner не запустился.\n\n${String(value)}`;
+          panel.textContent = `Svit Runner failed to start. / Svit Runner не запустился.\n\n${String(value)}`;
           root.replaceChildren(panel);
         };
         window.addEventListener('error', (event) => showStartupError(event.error?.stack || event.message));

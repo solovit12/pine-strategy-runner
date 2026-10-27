@@ -59,7 +59,7 @@ export async function runBacktest(request: BacktestRequest, signal: AbortSignal)
     }));
   } catch (error) {
     if (error instanceof TypeError) {
-      throw new Error('The local server is unavailable. Restart Pine Strategy Runner and run the backtest again. / Локальный сервер недоступен. Перезапустите Pine Strategy Runner и повторите расчёт.');
+      throw new Error('The local server is unavailable. Restart Svit Runner and run the backtest again. / Локальный сервер недоступен. Перезапустите Svit Runner и повторите расчёт.');
     }
     throw error;
   }

@@ -16,11 +16,12 @@ permissions:
   packages: write
 
 env:
-  WHEEL_IMAGE: ghcr.io/${{ github.repository }}-nautilus
+  # Keeps the name it was first published under (before the rename to Svit Runner).
+  WHEEL_IMAGE: ghcr.io/${{ github.repository_owner }}/pine-strategy-runner-nautilus
 
 jobs:
   build:
-    if: github.repository == 'solovit12/pine-strategy-runner'
+    if: github.repository == 'solovit12/svit-runner'
     strategy:
       fail-fast: false
       matrix:

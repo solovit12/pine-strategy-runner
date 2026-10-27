@@ -1,6 +1,6 @@
-# Pine Strategy Runner
+# Svit Runner
 
-Pine Strategy Runner is a web application for testing trading strategies on historical and live
+Svit Runner is a web application for testing trading strategies on historical and live
 market data. You bring a [TradingView Pine Script](https://www.tradingview.com/pine-script-docs/)
 strategy; the app backtests it on exchange history, runs it on live order books with virtual money
 (Paper), and — only if you choose to — trades it with real money on your own
@@ -92,13 +92,13 @@ You need **Docker**:
 
 About 1.1 GB of disk space (the first start downloads about 300 MB) and any recent 64-bit computer.
 
-1. Create a folder, for example `pine-strategy-runner`, and save
-   [`compose.yaml`](https://raw.githubusercontent.com/solovit12/pine-strategy-runner/main/compose.yaml)
+1. Create a folder, for example `svit-runner`, and save
+   [`compose.yaml`](https://raw.githubusercontent.com/solovit12/svit-runner/main/compose.yaml)
    into it. Or, in a terminal:
 
    ```bash
-   mkdir pine-strategy-runner && cd pine-strategy-runner
-   curl -fsSLO https://raw.githubusercontent.com/solovit12/pine-strategy-runner/main/compose.yaml
+   mkdir svit-runner && cd svit-runner
+   curl -fsSLO https://raw.githubusercontent.com/solovit12/svit-runner/main/compose.yaml
    ```
 
    On Windows PowerShell write `curl.exe` instead of `curl`.
@@ -121,7 +121,7 @@ it. This matters: the app has no login.
 
 1. **Copy a strategy from TradingView.** Open your strategy in TradingView's Pine Editor, select all,
    copy.
-2. **Paste it into the editor** of Pine Strategy Runner (the **Strategy** page), replacing the
+2. **Paste it into the editor** of Svit Runner (the **Strategy** page), replacing the
    template.
 3. **Backtest tab.** Choose a Binance market (for example `BTCUSDT`), a timeframe and dates, enter
    your commission per fill (for example `0.05` %), press **Run Backtest**. The chart, the metrics and
@@ -515,6 +515,10 @@ Strategies, settings, run history and account keys live in the Docker volume `ps
 updates. Python strategies stay in your `my_strategies` folder; the app never changes it. An update restarts the app: runs that were working restart by themselves within 6 hours, but
 it is cleaner to stop LIVE runs first.
 
+Installed before the app was renamed to Svit Runner (its image was `ghcr.io/solovit12/pine-strategy-runner`)?
+In your `compose.yaml` change the `image:` line to `ghcr.io/solovit12/svit-runner:latest`, then update as
+above. The project name in the file stays `pine-strategy-runner`, so your data stays where it is.
+
 **Back up** the volume (it contains your keys — keep the backup private):
 
 ```bash
@@ -573,8 +577,8 @@ that differ.
 Build the Docker image from source:
 
 ```bash
-git clone https://github.com/solovit12/pine-strategy-runner.git
-cd pine-strategy-runner
+git clone https://github.com/solovit12/svit-runner.git
+cd svit-runner
 NAUTILUS_WHEEL=prebuilt docker compose -f compose.yaml -f compose.build.yaml up -d --build
 ```
 
@@ -610,7 +614,7 @@ above; the Docker image contains it). Useful settings:
 | `BACKTEST_MAX_EXECUTION_MINUTES` | Backtest budget in minute candles (default 172 800 = 120 days). |
 
 Continuous integration (`.github/workflows`) builds the Nautilus wheel image and the app image
-published as `ghcr.io/solovit12/pine-strategy-runner`.
+published as `ghcr.io/solovit12/svit-runner`.
 
 ## How the code is organised
 

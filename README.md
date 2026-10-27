@@ -140,6 +140,8 @@ A backtest before Paper is optional.
 - **Open / Save.** The library keeps your strategies in the local database: the Pine code, the
   backtest settings and the last Paper settings together. Each name is used once; saving again
   replaces the saved strategy of that name. **Save as a separate strategy** creates another entry.
+  **Source link** (optional) keeps where the strategy comes from, for example its TradingView page;
+  the library shows it as a link.
 - **Delete strategy** removes one from the library (runs that already used it keep their own copy).
 - Starting Paper or LIVE saves the strategy and its settings automatically, so a run always knows the
   exact code it runs.

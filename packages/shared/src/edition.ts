@@ -16,4 +16,9 @@ export function liveTradingAvailable(_edition: Edition = EDITION): boolean {
   return true;
 }
 
+/** Backtest reports to the owner's Google Sheet and Telegram channel: the private edition only. */
+export function reportSharingAvailable(edition: Edition = EDITION): boolean {
+  return edition === 'full';
+}
+
 export const PINE_ONLY_MESSAGE = 'This edition runs Pine strategies only.';

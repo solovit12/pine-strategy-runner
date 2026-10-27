@@ -13,6 +13,9 @@ import type {
   CreateLiveAccountRequest, LiveAccountFees, LiveAccountView, LiveAccountsView, LiveConnectionCheck, PaperExperimentActivity,
   PaperExperimentCapabilities, PaperExperimentDetail, PaperExperimentSummary, StartPaperExperimentRequest, UpdateLiveAccountRequest,
 } from '../../../../packages/shared/src/paper-experiment-contracts';
+import type {
+  BacktestReport, ReportSettingsView, SheetRowResult, TelegramBacktestPost, TelegramPostResult,
+} from '../../../../packages/shared/src/report-contracts';
 
 export type PaperCapabilities = PaperExperimentCapabilities;
 export type CreatePaperExperimentInput = StartPaperExperimentRequest;
@@ -240,4 +243,34 @@ export async function checkLiveAccount(id: string): Promise<LiveConnectionCheck>
   return (await parse<{ check: LiveConnectionCheck }>(await fetch(`/api/live/accounts/${encodeURIComponent(id)}/check`, {
     method: 'POST',
   }))).check;
+}
+
+export async function loadReportSettings(signal?: AbortSignal): Promise<ReportSettingsView> {
+  return parse<ReportSettingsView>(await fetch('/api/reports/settings', { signal }));
+}
+
+/** The robot's key is sent once and stays on the server; it never comes back. */
+export async function saveGoogleReportSettings(input: { sheet: string; serviceAccountKey?: string }): Promise<ReportSettingsView> {
+  return parse<ReportSettingsView>(await fetch('/api/reports/google', {
+    method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input),
+  }));
+}
+
+/** The bot token is sent once and stays on the server; it never comes back. */
+export async function saveTelegramReportSettings(input: { channel: string; botToken?: string }): Promise<ReportSettingsView> {
+  return parse<ReportSettingsView>(await fetch('/api/reports/telegram', {
+    method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(input),
+  }));
+}
+
+export async function addBacktestToSheet(report: BacktestReport): Promise<SheetRowResult> {
+  return parse<SheetRowResult>(await fetch('/api/reports/backtests/sheet', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(report),
+  }));
+}
+
+export async function postBacktestToTelegram(post: TelegramBacktestPost): Promise<TelegramPostResult> {
+  return parse<TelegramPostResult>(await fetch('/api/reports/backtests/telegram', {
+    method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(post),
+  }));
 }

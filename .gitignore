@@ -15,3 +15,6 @@ undefined/
 CLAUDE.local.md
 *.command
 HANDOFF_FOR_CLAUDE_CODE.md
+
+# Claude Code: personal permissions of this machine
+.claude/settings.local.json

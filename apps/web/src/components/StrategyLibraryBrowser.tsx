@@ -158,7 +158,9 @@ export function StrategyLibraryBrowser({
                   <div><dt>Paper timeframe</dt><dd>{activeDetail.version.paperSettings.timeframe}</dd></div>
                   {activeDetail.version.metadata.origin ? <div><dt>Origin</dt><dd>{activeDetail.version.metadata.origin}</dd></div> : null}
                   {activeDetail.version.metadata.fidelity ? <div><dt>Fidelity</dt><dd>{activeDetail.version.metadata.fidelity}</dd></div> : null}
-                  {activeDetail.version.metadata.sourceReference ? <div><dt>Source reference</dt><dd>{activeDetail.version.metadata.sourceReference}</dd></div> : null}
+                  {activeDetail.version.metadata.sourceReference ? <div><dt>Source</dt><dd>{/^https?:\/\//.test(activeDetail.version.metadata.sourceReference)
+                    ? <a href={activeDetail.version.metadata.sourceReference} target="_blank" rel="noreferrer">{activeDetail.version.metadata.sourceReference}</a>
+                    : activeDetail.version.metadata.sourceReference}</dd></div> : null}
                   <div><dt>Pine SHA-256</dt><dd><code>{activeDetail.version.sourceSha256}</code></dd></div>
                 </dl>
               </details>

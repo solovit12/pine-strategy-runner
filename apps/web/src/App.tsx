@@ -3,6 +3,7 @@ import { AlertTriangle, Play, Settings2, ShieldCheck, Square } from 'lucide-reac
 import { useEffect, useRef, useState } from 'react';
 import { DEFAULT_SLIPPAGE_PERCENT, PINETS_VERSION, type BacktestRequest, type BacktestResponse, type BacktestTimeframe, type PresetResponse } from '../../../packages/shared/src/contracts';
 import { PYTHON_STRATEGY_SOURCE_PREFIX, pythonStrategyRef, type PaperStrategySettings, type StrategyDetail, type StrategySummary } from '../../../packages/shared/src/strategy-catalog-contracts';
+import { BacktestReports } from './components/BacktestReports';
 import { BinanceMarketSelector } from './components/BinanceMarketSelector';
 import { Metrics } from './components/Metrics';
 import { LiveAccountsPage } from './components/LiveSettings';
@@ -19,10 +20,11 @@ import {
 } from './lib/api';
 import { backtestDateWindowError, inclusiveUtcDays } from './lib/backtest-date-window';
 import { readEditorDraft, writeEditorDraft, type EditorDraft } from './lib/editor-draft';
+import { validSourceUrl } from './lib/backtest-report';
 import { backtestResultAfter } from './lib/run-result-state';
 import { backtestSettingsSupportedByEditor } from './lib/strategy-editor-compat';
 import { registerBacktestWebTools } from './lib/webmcp';
-import { EDITION, liveTradingAvailable } from '../../../packages/shared/src/edition';
+import { EDITION, liveTradingAvailable, reportSharingAvailable } from '../../../packages/shared/src/edition';
 import { findSavedPythonStrategy, pythonStrategySource } from './lib/python-strategy-library';
 import { changedDeclarationProperties, strategyDeclarationProperties, type StrategyDeclarationProperties } from './strategy-declaration';
 
@@ -170,6 +172,7 @@ export function App() {
   const [browseStrategies, setBrowseStrategies] = useState(false);
   const [saveDialogOpen, setSaveDialogOpen] = useState(false);
   const [saveNameDraft, setSaveNameDraft] = useState('');
+  const [saveSourceDraft, setSaveSourceDraft] = useState('');
   const [saveError, setSaveError] = useState('');
   const [loadedStrategy, setLoadedStrategy] = useState<StrategyDetail | null>(null);
   const [previousEditors, setPreviousEditors] = useState<EditorSnapshot[]>([]);
@@ -571,6 +574,7 @@ export function App() {
 
   const openSaveDialog = () => {
     setSaveNameDraft(strategyName.trim() || /\bstrategy\s*\(\s*['"]([^'"]+)['"]/.exec(source)?.[1] || '');
+    setSaveSourceDraft(loadedStrategy?.version.metadata.sourceReference ?? '');
     setSaveError('');
     setSaveDialogOpen(true);
   };
@@ -581,14 +585,17 @@ export function App() {
     try {
       const name = saveNameDraft.trim();
       if (!name) throw new Error('Enter a strategy name before saving.');
+      const sourceReference = saveSourceDraft.trim();
+      if (sourceReference && !validSourceUrl(sourceReference)) throw new Error('Enter the source as a full link starting with https://, or leave it empty.');
       const request = currentRequest();
       const { source: pineSource, ...backtestSettings } = request;
+      const { sourceReference: _previous, ...metadata } = newStrategy ? {} : loadedStrategy?.version.metadata ?? {};
       const input = {
         name,
         source: pineSource,
         backtestSettings,
         paperSettings: loadedStrategy?.version.paperSettings ?? DEFAULT_PAPER_SETTINGS,
-        metadata: newStrategy ? {} : loadedStrategy?.version.metadata ?? {},
+        metadata: sourceReference ? { ...metadata, sourceReference } : metadata,
       };
       const detail = newStrategy || !loadedStrategy
         ? await createStrategy(input)
@@ -743,6 +750,7 @@ export function App() {
           <header className="strategy-dialog-heading"><h3 id="save-strategy-title">Save strategy</h3><button type="button" onClick={closeSaveDialog} disabled={catalogBusy}>Close</button></header>
           <form onSubmit={(event) => { event.preventDefault(); void saveFromEditor(!loadedStrategy); }}>
             <label className="strategy-save-name"><span>Strategy name</span><input autoFocus value={saveNameDraft} onChange={(event) => setSaveNameDraft(event.target.value)} maxLength={120} disabled={catalogBusy} /></label>
+            <label className="strategy-save-name strategy-save-source"><span>Source link</span><input value={saveSourceDraft} onChange={(event) => setSaveSourceDraft(event.target.value)} maxLength={500} placeholder="https://www.tradingview.com/script/…" disabled={catalogBusy} /></label>
             <p className="strategy-save-hint">{loadedStrategy ? `Save replaces ${loadedStrategy.version.name} in the library with this code and its settings.` : 'Save creates a strategy with this Pine code and its Backtest and Paper settings. Each name can be used once.'}<InfoTooltip label="saving a strategy" en="Saving stores Pine source, the current backtest settings and a Paper draft in the local catalog. It does not run a backtest or start Paper trading." ru="Сохранение записывает Pine-код, текущие настройки бэктеста и черновик Paper в локальный каталог. Оно не запускает бэктест или пэйпер-торговлю." /></p>
             {saveError && <p className="strategy-save-error" role="alert">{saveError}</p>}
             <div className="strategy-dialog-actions"><button type="button" onClick={closeSaveDialog} disabled={catalogBusy}>Cancel</button><button className="primary" type="submit" disabled={catalogBusy}>{catalogBusy ? 'Saving…' : 'Save'}</button></div>
@@ -888,6 +896,12 @@ export function App() {
       {error && <section className="error-banner"><AlertTriangle size={18} /><div><strong>Strategy Did Not Start</strong><p>{errorCopy.en}{errorCopy.ru && <> <InfoTooltip label="run error" en={errorCopy.en} ru={errorCopy.ru} /></>}</p></div></section>}
 
       <Metrics metrics={result?.metrics || null} />
+      {reportSharingAvailable(EDITION) && state === 'success' && result && lastBacktestedRequest && <BacktestReports key={result.runId}
+        result={result} request={lastBacktestedRequest} loadedStrategy={loadedStrategy} onStrategySaved={(detail) => {
+          setLoadedStrategy(detail);
+          setPaperStrategy(detail);
+          void refreshStrategies().catch(() => undefined);
+        }} />}
       <TradesTable trades={result?.trades || []} />
 
       <footer className="evidence-footer">

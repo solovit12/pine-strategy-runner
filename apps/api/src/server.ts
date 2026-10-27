@@ -54,7 +54,7 @@ import {
 import { runPineWorker } from './worker-client.js';
 import { BinanceFuturesMarketListService } from './binance-futures-market-list.js';
 import { PaperExperimentControllerV1, type PaperExperimentRuntimeFactory } from './paper-execution/paper-experiment-controller.js';
-import { EDITION, liveTradingAvailable, pythonStrategiesAvailable, type Edition } from '../../../packages/shared/src/edition.js';
+import { EDITION, liveTradingAvailable, pythonStrategiesAvailable, reportSharingAvailable, type Edition } from '../../../packages/shared/src/edition.js';
 import type { LiveExchange } from '../../../packages/shared/src/paper-experiment-contracts.js';
 import { createNativePaperFactory } from './paper-execution/native-strategies.js';
 import { createPaperRuntimeRouter, createPinePaperFactory } from './paper-execution/pine-paper-factory.js';
@@ -62,6 +62,7 @@ import { fetchVenueVolumes, type PaperVenueKey } from './paper-execution/venue-m
 import { isCrossOriginPaperWrite, registerPaperRoutes } from './paper-routes.js';
 import { registerLiveRoutes } from './live-routes.js';
 import { LiveSettingsStore } from './live-settings.js';
+import { ReportSettingsStore, registerReportRoutes } from './report-sharing.js';
 import {
   DEFAULT_ENGINE_URL, ENGINE_TOKEN_HEADER, engineStatus, engineTokenMatches, readEngineToken, registerEngineProxy,
   type EngineConnection,
@@ -125,6 +126,8 @@ export interface BuildAppOptions {
   liveSecretsDir?: string;
   /** A server-managed closed folder with the same credentials file, read as a fallback (null: none). */
   liveServerSecretsDir?: string | null;
+  /** Where the Google robot key and the Telegram bot token for reports are kept (default: `report-secrets` next to the library). */
+  reportSecretsDir?: string;
 }
 
 function positiveInteger(value: string | undefined, fallback: number, name: string): number {
@@ -480,6 +483,12 @@ export async function buildApp(options: BuildAppOptions = {}) {
   }
   // The engine serves only Paper; the site owns pages, the library and backtests.
   if (role === 'engine') return app;
+
+  if (reportSharingAvailable(edition)) {
+    const reportSecretsDir = options.reportSecretsDir ?? process.env.PSR_REPORT_SECRETS_DIR
+      ?? (strategyCatalogDir ? path.join(path.dirname(strategyCatalogDir), 'report-secrets') : path.join(projectRoot, '.local', 'report-secrets'));
+    registerReportRoutes(app, { store: new ReportSettingsStore(reportSecretsDir) });
+  }
 
   // Market picker ordering only; served by the site so it never touches the Paper engine.
   const venueVolumeCache = new Map<PaperVenueKey, { at: number; volumes: Record<string, number> }>();

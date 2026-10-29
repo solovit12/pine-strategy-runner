@@ -4,7 +4,7 @@ import { IProvider, ISymbolInfo } from './marketData/IProvider';
 import { Context } from './Context.class';
 import { splitTickerModifier, withTickerModifier } from './tickerModifier';
 import { createSyminfo } from './namespaces/Syminfo';
-import { Series } from './Series';
+import { dropHistory, Series } from './Series';
 import { Indicator } from './Indicator';
 import { processStrategyOrders, processOrdersOnClose, processExitOrders, processMarginCall, finalizeStrategyBar, finalizeStrategyRun, isAdverseFirstBar, applyPendingCloseMarginCall, snapshotStrategyState, restoreStrategyState, processStrategyReplayPoint, computeRequiredMargin, applyExternalStrategyFill } from './namespaces/strategy/utils';
 import type { StrategyReplayOrderAudit, StrategyExternalFill, StrategyExternalFillResult } from './namespaces/strategy/utils';
@@ -186,6 +186,31 @@ export class PineTS {
      */
     public setStrategyBrokerReplayHook(hook?: StrategyBrokerReplayHook): void {
         this._strategyBrokerReplayHook = hook;
+    }
+
+    private _historyLimit?: number;
+    private _keepPlotHistory = true;
+
+    /**
+     * Keep only the current value and `bars` past values of every script variable and
+     * function argument during a one-shot `run()` (like TradingView's max_bars_back, whose
+     * maximum is 5000), so memory stops growing with the number of bars. Built-in OHLCV and
+     * time series and request.security contexts keep their whole history. A read of a dropped
+     * bar throws PineHistoryLimitError; nothing is guessed. Undefined keeps all history.
+     * Paginated runs, streaming and updateTail() ignore it.
+     */
+    public setHistoryLimit(bars?: number): void {
+        if (bars !== undefined && !(Number.isSafeInteger(bars) && bars >= 1)) throw new Error('History limit must be a positive whole number of bars.');
+        this._historyLimit = bars;
+    }
+
+    /**
+     * False keeps only the latest point of each plot during a one-shot `run()`, for callers
+     * that read the strategy ledger and never the plotted values. Paginated runs and
+     * streaming always keep every point.
+     */
+    public setPlotHistory(keep: boolean): void {
+        this._keepPlotHistory = keep;
     }
 
     /**
@@ -573,6 +598,9 @@ export class PineTS {
 
         const context = this._initializeContext(ind.source ?? null as any, prepared.inputs, this._isSecondaryContext);
         context.pineVersion = (prepared.fn as any)._pineVersion ?? null;
+        // request.security reads its contexts' argument history by absolute bar index.
+        if (!this._isSecondaryContext) context.historyLimit = this._historyLimit;
+        context.keepPlotHistory = this._keepPlotHistory;
         this._transpiledCode = prepared.fn;
         // Propagate transpile-time slices (one per request.security_lower_tf
         // call site) onto the Context so the slow path of the LTF runtime
@@ -923,6 +951,10 @@ export class PineTS {
     public async updateTail(context: Context): Promise<boolean> {
         // Guard: skip if no data (e.g. secondary context failed to load from provider)
         if (this.data.length === 0 || Array.isArray(this.source)) return false;
+        // Rolling back the last bar needs the history and plots a limited run dropped.
+        if (context.historyLimit !== undefined || !context.keepPlotHistory) {
+            throw new Error('updateTail() cannot continue a run made with a history limit or without plot history.');
+        }
 
         const { newCandles, updatedLastCandle } = await this._updateMarketData();
         if (newCandles === 0 && !updatedLastCandle) return false;
@@ -1228,6 +1260,10 @@ export class PineTS {
      */
     private async _executeIterations(context: Context, transpiledFn: Function, startIdx: number, endIdx: number): Promise<void> {
         const contextVarNames = ['const', 'var', 'let', 'params'];
+        // Arrays are trimmed in batches (a quarter of the limit, at least 64 bars) so each
+        // value is moved a few times at most.
+        const historyLimit = context.historyLimit;
+        const historyTrimAt = historyLimit === undefined ? Infinity : historyLimit + 1 + Math.max(64, Math.ceil(historyLimit / 4));
 
         for (let i = startIdx; i < endIdx; i++) {
             context.idx = i;
@@ -1329,6 +1365,13 @@ export class PineTS {
                 if (helper.syncToPlot) helper.syncToPlot();
             }
 
+            if (!context.keepPlotHistory) {
+                for (const key in context.plots) {
+                    const points = context.plots[key].data;
+                    if (points.length > 1) points.splice(0, points.length - 1);
+                }
+            }
+
             //shift context
             const shiftVariables = (container: any) => {
                 for (let ctxVarName of contextVarNames) {
@@ -1339,10 +1382,12 @@ export class PineTS {
                         if (item instanceof Series) {
                             const val = item.get(0);
                             item.data.push(val);
+                            if (item.data.length > historyTrimAt) dropHistory(item.data, historyLimit!);
                         } else if (Array.isArray(item)) {
                             // Legacy array support during transition
                             const val = item[item.length - 1];
                             item.push(val);
+                            if (item.length > historyTrimAt) dropHistory(item, historyLimit!);
                         }
                     }
                 }

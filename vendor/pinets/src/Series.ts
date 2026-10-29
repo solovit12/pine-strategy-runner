@@ -1,3 +1,31 @@
+import { PineHistoryLimitError } from './errors/PineHistoryLimitError';
+
+/** Values dropped from the front of a history array, and the limit that dropped them. */
+const droppedHistory = new WeakMap<any[], { count: number; limit: number }>();
+
+/** Bars dropped from the front of `data` by a history limit (0 when none). */
+export function droppedBars(data: any[]): number {
+    return droppedHistory.get(data)?.count ?? 0;
+}
+
+/**
+ * Drops the oldest values of a forward-ordered history array in place, keeping the current
+ * value and `limit` past ones. Views sharing the array see the same history; a later read of
+ * a dropped bar throws instead of returning na.
+ */
+export function dropHistory(data: any[], limit: number): void {
+    const drop = data.length - 1 - limit;
+    if (drop <= 0) return;
+    data.splice(0, drop);
+    droppedHistory.set(data, { count: droppedBars(data) + drop, limit });
+}
+
+/** Throws when `realIndex` (< 0) points at a bar that was dropped rather than before the first bar. */
+export function assertNotDropped(data: any[], realIndex: number): void {
+    const dropped = droppedHistory.get(data);
+    if (dropped && realIndex + dropped.count >= 0) throw new PineHistoryLimitError(data.length - 1 - realIndex, dropped.limit);
+}
+
 export class Series {
     /** Value of a read before the first bar: na, or `false` for a Pine v6 bool series (v6 bools are never na). */
     public beforeStart: any = NaN;
@@ -16,7 +44,10 @@ export class Series {
         let lookback = this.offset + index;
         if (!Number.isInteger(lookback)) lookback = Math.trunc(lookback);
         const realIndex = this.data.length - 1 - lookback;
-        if (realIndex < 0) return this.beforeStart;
+        if (realIndex < 0) {
+            assertNotDropped(this.data, realIndex);
+            return this.beforeStart;
+        }
         if (realIndex >= this.data.length) return NaN;
         return this.data[realIndex];
     }

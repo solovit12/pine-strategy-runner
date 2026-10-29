@@ -138,7 +138,7 @@ export function pineCompatibility(source: string, context: PineCompatibilityCont
   for (const call of calls(source, masked, /strategy\s*\.\s*exit/)) {
     const trailing = call.args.some((arg) => /^trail_(points|price)\s*=/.test(arg));
     if (trailing && !call.args.some((arg) => /^trail_offset\s*=/.test(arg))) {
-      add(call.start, 'stop', 'backtest', 'strategy.exit has a trailing stop without trail_offset, so it never triggers; the backtest stops on it.');
+      add(call.start, 'stop', 'backtest', 'strategy.exit has a trailing stop without trail_offset, so it never triggers (TradingView ignores it); the backtest stops on it: remove trail_points / trail_price, or add trail_offset.');
     }
   }
 

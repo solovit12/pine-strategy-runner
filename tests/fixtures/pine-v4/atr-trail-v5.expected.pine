@@ -1,0 +1,36 @@
+//@version=5
+strategy(title="ATR trail v4 sample", overlay = true)
+// A v4 strategy written for the converter tests: the usual v4 habits in one place.
+
+// Inputs
+k = input.int(1,     title = "ATR multiplier")
+len = input.int(10,    title = "ATR period")
+useHa = input.bool(false, title = "Heikin Ashi candles")
+fromYear = input.int(defval = 2019, title = "From year", minval = 1970)
+res = input.timeframe("60", "Higher timeframe")
+step = input.float(0.5, title = "Step", minval = 0.1)
+
+start = timestamp(fromYear, 1, 1, 00, 00)
+inWindow = time >= start
+
+nLoss = k * ta.atr(len)
+src = useHa ? request.security(ticker.heikinashi(syminfo.tickerid), timeframe.period, close, lookahead = barmerge.lookahead_off) : close
+
+trail = 0.0
+trail := (src > nz(trail[1], 0) and src[1] > nz(trail[1], 0) ? math.max(nz(trail[1]), src - nLoss) : (src < nz(trail[1], 0) and src[1] < nz(trail[1], 0) ? math.min(nz(trail[1]), src + nLoss) : (src > nz(trail[1], 0) ? src - nLoss : src + nLoss)))
+
+ema = ta.ema(src, 1)
+above = ta.crossover(ema, trail)
+below = ta.crossover(trail, ema)
+buy  = src > trail and above
+sell = src < trail and below
+
+plotshape(buy,  title = "Buy",  text = 'Buy',  style = shape.labelup,   location = location.belowbar, color= color.green, textcolor = color.white, size = size.tiny)
+plot(trail, "Trail", color.new(color.orange, 40), 2, plot.style_line)
+bgcolor(color.new(buy ? color.green : na, 85))
+txt = str.tostring(math.round(ta.tr, 2))
+
+if buy  and inWindow
+    strategy.entry("long",   strategy.long)
+if sell and inWindow
+    strategy.entry("short", strategy.short)

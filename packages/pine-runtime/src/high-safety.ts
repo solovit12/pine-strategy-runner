@@ -105,8 +105,10 @@ export function assertHighPendingOrdersSupported(orders: readonly StrategyBroker
     if (order.trailingWithoutOffset) {
       throw new HighSafetyError(
         'HIGH_UNSUPPORTED_ORDER_FEATURE',
-        `Trailing stop ${order.id} has no trail_offset, so it would never trigger; add trail_offset. / `
-          + `У трейлинг-стопа ${order.id} нет trail_offset, он никогда не сработает; добавьте trail_offset.`,
+        `Trailing stop ${order.id} has no trail_offset, so it would never trigger (TradingView ignores it too). `
+          + 'Remove trail_points / trail_price from that strategy.exit to match TradingView, or add trail_offset. / '
+          + `У трейлинг-стопа ${order.id} нет trail_offset, он никогда не сработает (TradingView его тоже не учитывает). `
+          + 'Уберите trail_points / trail_price из этого strategy.exit, чтобы было как на TradingView, или добавьте trail_offset.',
         { orderId: order.id, feature: 'trailing-without-offset' },
       );
     }

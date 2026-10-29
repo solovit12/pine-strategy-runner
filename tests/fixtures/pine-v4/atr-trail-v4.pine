@@ -1,0 +1,36 @@
+//@version=4
+strategy(title="ATR trail v4 sample", overlay = true)
+// A v4 strategy written for the converter tests: the usual v4 habits in one place.
+
+// Inputs
+k = input(1,     title = "ATR multiplier")
+len = input(10,    title = "ATR period")
+useHa = input(false, title = "Heikin Ashi candles")
+fromYear = input(defval = 2019, title = "From year", minval = 1970)
+res = input("60", "Higher timeframe", input.resolution)
+step = input(0.5, title = "Step", type = input.float, minval = 0.1)
+
+start = timestamp(fromYear, 1, 1, 00, 00)
+inWindow = time >= start
+
+nLoss = k * atr(len)
+src = useHa ? security(heikinashi(syminfo.tickerid), timeframe.period, close, lookahead = false) : close
+
+trail = 0.0
+trail := iff(src > nz(trail[1], 0) and src[1] > nz(trail[1], 0), max(nz(trail[1]), src - nLoss),
+   iff(src < nz(trail[1], 0) and src[1] < nz(trail[1], 0), min(nz(trail[1]), src + nLoss),
+   iff(src > nz(trail[1], 0), src - nLoss, src + nLoss)))
+
+ema = ema(src, 1)
+above = crossover(ema, trail)
+below = crossover(trail, ema)
+buy  = src > trail and above
+sell = src < trail and below
+
+plotshape(buy,  title = "Buy",  text = 'Buy',  style = shape.labelup,   location = location.belowbar, color= color.green, textcolor = color.white, transp = 0, size = size.tiny)
+plot(trail, "Trail", color.orange, 2, plot.style_line, 40)
+bgcolor(buy ? color.green : na, transp = 85)
+txt = tostring(round(tr, 2))
+
+strategy.entry("long",   true, when = buy  and inWindow)
+strategy.entry("short", false, when = sell and inWindow)

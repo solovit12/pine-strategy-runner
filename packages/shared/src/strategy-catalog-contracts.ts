@@ -314,7 +314,9 @@ const StrategyVersionDraftSchema = z.object({
     return;
   }
   if (!/^\s*\/\/\s*@version\s*=\s*[56]\s*$/m.test(value.source)) {
-    context.addIssue({ code: 'custom', path: ['source'], message: 'Pine source must declare //@version=5 or //@version=6.' });
+    context.addIssue({ code: 'custom', path: ['source'], message: /^\s*\/\/\s*@version\s*=\s*4\s*$/m.test(value.source)
+      ? 'This is Pine v4 code: press "Convert to v5" under the editor, then save. / Это код Pine v4: нажмите «Convert to v5» под редактором и сохраните.'
+      : 'Pine source must declare //@version=5 or //@version=6.' });
   }
   if (!hasStrategyDeclaration(value.source)) {
     context.addIssue({ code: 'custom', path: ['source'], message: 'Pine source must declare strategy(...), not indicator(...).' });

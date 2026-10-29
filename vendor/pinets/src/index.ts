@@ -6,6 +6,7 @@ import { Context } from './Context.class';
 import { Provider } from './marketData/Provider.class';
 import { Indicator } from './Indicator';
 import { PineRuntimeError } from './errors/PineRuntimeError';
+import { PineHistoryLimitError } from './errors/PineHistoryLimitError';
 
 // Provider classes for direct instantiation
 export { BaseProvider } from './marketData/BaseProvider';
@@ -22,7 +23,7 @@ export { aggregateCandles, selectSubTimeframe, getAggregationRatio } from './mar
 
 export { splitTickerModifier, stripTickerModifier, withTickerModifier, decodeTickerId, encodeTickerId } from './tickerModifier';
 
-export { PineTS, Context, Provider, Indicator, PineRuntimeError };
+export { PineTS, Context, Provider, Indicator, PineRuntimeError, PineHistoryLimitError };
 // Syntax check without running: Pine Strategy Runner explains code errors before a run.
 export { pineToJS } from './transpiler/pineToJS/pineToJS.index';
 export type { StrategyBrokerTick, StrategyBrokerTickAudit, StrategyBrokerPendingOrder, StrategyBrokerReplayController, StrategyBrokerReplayHook } from './PineTS.class';

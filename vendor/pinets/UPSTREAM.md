@@ -32,6 +32,11 @@ High replay:
   and stop-loss / trailing exits; never limits or take-profits), the fill rounded to the tick on
   the worse side; external (real) fills take no synthetic slippage of either kind.
 - exposes read-only pending-order capability metadata to the product adapter;
+- adds opt-in memory bounds for one-shot runs (2026-10-29): `setHistoryLimit(bars)` keeps the
+  current value and `bars` past values of every script variable and function argument (built-in
+  OHLCV/time series and request.security contexts keep everything; a read of a dropped bar throws
+  `PineHistoryLimitError`; `ta.pivothigh/pivotlow` account for the dropped front), and
+  `setPlotHistory(false)` keeps only the latest point of each plot. `updateTail()` refuses such a run;
 - reports required margin and whether each replay point would require a
   margin call, without performing an unqualified High liquidation.
 

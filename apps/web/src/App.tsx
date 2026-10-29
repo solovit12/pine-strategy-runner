@@ -560,6 +560,14 @@ export function App() {
       setCatalogMessage('This saved strategy has backtest settings that this editor cannot show or preserve. The editor was left unchanged.');
       return;
     }
+    rememberEditor();
+    applyStrategyToEditor(detail);
+    closeOpenDialog();
+    setCatalogMessage(`Opened ${detail.version.name}.`);
+  };
+
+  /** Keeps the editor as it is now, so Undo can bring it back (the last three). */
+  const rememberEditor = () => {
     const snapshot: EditorSnapshot = {
       source, symbol, timeframe, startDate, endDate, initialCapital,
       defaultOrderSizeValue, defaultOrderSizeType, pyramiding, commissionValueInput,
@@ -567,9 +575,23 @@ export function App() {
       loadedStrategy, paperStrategy, result, lastBacktestedRequest, state, error,
     };
     setPreviousEditors((items) => [...items, snapshot].slice(-3));
-    applyStrategyToEditor(detail);
-    closeOpenDialog();
-    setCatalogMessage(`Opened ${detail.version.name}.`);
+  };
+
+  /** Create: an empty editor with no saved strategy behind it, so Save adds a new one. The backtest settings stay. */
+  const startNewStrategy = () => {
+    rememberEditor();
+    paperStrategySelectionEpoch.current += 1;
+    setLoadedStrategy(null);
+    setPaperStrategy(null);
+    setSelectedStrategyId('');
+    setStrategyName('');
+    setLoadedSource('');
+    setResult(null);
+    setLastBacktestedRequest(null);
+    setError('');
+    setState('ready');
+    setCatalogMessage('New strategy: paste its Pine code into the editor, then Save.');
+    editorRef.current?.focus();
   };
 
   const openSaveDialog = () => {
@@ -579,7 +601,7 @@ export function App() {
     setSaveDialogOpen(true);
   };
 
-  const saveFromEditor = async (newStrategy: boolean) => {
+  const saveFromEditor = async () => {
     setCatalogBusy(true);
     setSaveError('');
     try {
@@ -589,7 +611,7 @@ export function App() {
       if (sourceReference && !validSourceUrl(sourceReference)) throw new Error('Enter the source as a full link starting with https://, or leave it empty.');
       const request = currentRequest();
       const { source: pineSource, ...backtestSettings } = request;
-      const { sourceReference: _previous, ...metadata } = newStrategy ? {} : loadedStrategy?.version.metadata ?? {};
+      const { sourceReference: _previous, ...metadata } = loadedStrategy?.version.metadata ?? {};
       const input = {
         name,
         source: pineSource,
@@ -597,7 +619,7 @@ export function App() {
         paperSettings: loadedStrategy?.version.paperSettings ?? DEFAULT_PAPER_SETTINGS,
         metadata: sourceReference ? { ...metadata, sourceReference } : metadata,
       };
-      const detail = newStrategy || !loadedStrategy
+      const detail = !loadedStrategy
         ? await createStrategy(input)
         : await saveStrategyVersion(loadedStrategy.strategy.id, {
           ...input, expectedVersion: loadedStrategy.strategy.currentVersion,
@@ -701,7 +723,7 @@ export function App() {
     stop: () => stopRef.current(),
     reportError: (reason) => console.warn('WebMCP registration failed', reason),
   }), []);
-  const sourceVersion = source.match(/^\s*\/\/@version\s*=\s*(\d+)/m)?.[1] || '?';
+  const sourceVersion = source.match(/^\s*\/\/@version\s*=\s*(\d+)/m)?.[1];
   const selectedDays = inclusiveUtcDays(startDate, endDate);
   const dateRangeCopy = selectedDays !== null && selectedDays > 0
     ? {
@@ -736,7 +758,7 @@ export function App() {
         </div>
       </header>
 
-      {catalogMessage && <div className="catalog-message" role="status"><span>{catalogMessage}</span>{previousEditors.length > 0 && (catalogMessage.startsWith('Opened ') || catalogMessage === 'Previous editor restored.') && <button type="button" onClick={restorePreviousEditor} disabled={catalogBusy || state === 'running'}>Undo open</button>}</div>}
+      {catalogMessage && <div className="catalog-message" role="status"><span>{catalogMessage}</span>{previousEditors.length > 0 && (catalogMessage.startsWith('Opened ') || catalogMessage.startsWith('New strategy') || catalogMessage === 'Previous editor restored.') && <button type="button" onClick={restorePreviousEditor} disabled={catalogBusy || state === 'running'}>{catalogMessage.startsWith('New strategy') ? 'Undo' : 'Undo open'}</button>}</div>}
 
       {browseStrategies && <div className="strategy-dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !catalogBusy) closeOpenDialog(); }}>
         <section className="strategy-dialog" role="dialog" aria-modal="true" aria-labelledby="open-strategy-title">
@@ -748,13 +770,12 @@ export function App() {
       {saveDialogOpen && <div className="strategy-dialog-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget && !catalogBusy) closeSaveDialog(); }}>
         <section className="strategy-dialog strategy-save-dialog" role="dialog" aria-modal="true" aria-labelledby="save-strategy-title">
           <header className="strategy-dialog-heading"><h3 id="save-strategy-title">Save strategy</h3><button type="button" onClick={closeSaveDialog} disabled={catalogBusy}>Close</button></header>
-          <form onSubmit={(event) => { event.preventDefault(); void saveFromEditor(!loadedStrategy); }}>
+          <form onSubmit={(event) => { event.preventDefault(); void saveFromEditor(); }}>
             <label className="strategy-save-name"><span>Strategy name</span><input autoFocus value={saveNameDraft} onChange={(event) => setSaveNameDraft(event.target.value)} maxLength={120} disabled={catalogBusy} /></label>
             <label className="strategy-save-name strategy-save-source"><span>Source link</span><input value={saveSourceDraft} onChange={(event) => setSaveSourceDraft(event.target.value)} maxLength={500} placeholder="https://www.tradingview.com/script/…" disabled={catalogBusy} /></label>
-            <p className="strategy-save-hint">{loadedStrategy ? `Save replaces ${loadedStrategy.version.name} in the library with this code and its settings.` : 'Save creates a strategy with this Pine code and its Backtest and Paper settings. Each name can be used once.'}<InfoTooltip label="saving a strategy" en="Saving stores Pine source, the current backtest settings and a Paper draft in the local catalog. It does not run a backtest or start Paper trading." ru="Сохранение записывает Pine-код, текущие настройки бэктеста и черновик Paper в локальный каталог. Оно не запускает бэктест или пэйпер-торговлю." /></p>
+            <p className="strategy-save-hint">{loadedStrategy ? `Save replaces ${loadedStrategy.version.name} in the library with this code and its settings. For another strategy, close this and press Create.` : 'Save creates a new strategy with this Pine code and its Backtest and Paper settings. Each name can be used once.'}<InfoTooltip label="saving a strategy" en="Saving stores Pine source, the current backtest settings and a Paper draft in the local catalog. It does not run a backtest or start Paper trading." ru="Сохранение записывает Pine-код, текущие настройки бэктеста и черновик Paper в локальный каталог. Оно не запускает бэктест или пэйпер-торговлю." /></p>
             {saveError && <p className="strategy-save-error" role="alert">{saveError}</p>}
             <div className="strategy-dialog-actions"><button type="button" onClick={closeSaveDialog} disabled={catalogBusy}>Cancel</button><button className="primary" type="submit" disabled={catalogBusy}>{catalogBusy ? 'Saving…' : 'Save'}</button></div>
-            {loadedStrategy && <details className="strategy-save-more"><summary>Save as a separate strategy</summary><p>Creates another item in the library from the current editor. Give it a name no other strategy uses.</p><button type="button" onClick={() => { void saveFromEditor(true); }} disabled={catalogBusy}>Create separate strategy</button></details>}
           </form>
         </section>
       </div>}
@@ -768,13 +789,14 @@ export function App() {
       <section className="workbench">
         <div className="editor-panel">
           <div className="panel-heading">
-            <div><span className="eyebrow">SOURCE · PINE V{sourceVersion}</span><h2>Strategy Editor</h2></div>
+            <div><span className="eyebrow">SOURCE · PINE{source.trim() ? ` V${sourceVersion ?? '?'}` : ''}</span><h2>Strategy Editor</h2></div>
             <span className="file-chip">strategy.pine</span>
           </div>
           {catalogEnabled && <div className="strategy-library">
             <div className="strategy-library-summary">
               <div className="strategy-library-current"><span>STRATEGY</span><strong>{loadedStrategy?.version.name ?? 'Unsaved draft'}</strong></div>
               <div className="strategy-library-buttons">
+                <button type="button" onClick={startNewStrategy} disabled={catalogBusy || state === 'running'} title="An empty editor for a new strategy">Create</button>
                 <button ref={openButtonRef} type="button" onClick={() => setBrowseStrategies(true)} aria-haspopup="dialog" disabled={catalogBusy}>Open</button>
                 <button ref={saveButtonRef} type="button" className="primary" onClick={openSaveDialog} aria-haspopup="dialog" disabled={catalogBusy || state === 'running'}>Save</button>
               </div>
@@ -802,6 +824,13 @@ export function App() {
             editor.revealLineInCenter(line);
             editor.setPosition({ lineNumber: line, column: 1 });
             editor.focus();
+          }} onReplaceSource={(next) => {
+            const editor = editorRef.current;
+            const model = editor?.getModel();
+            if (!editor || !model) { setSource(next); return; }
+            editor.pushUndoStop();
+            editor.executeEdits('pine-convert', [{ range: model.getFullModelRange(), text: next }]);
+            editor.pushUndoStop();
           }} />
           <div className="editor-footer"><span>UTF-8</span><span>Spaces: 4</span><span>UTC</span></div>
         </div>

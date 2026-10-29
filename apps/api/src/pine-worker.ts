@@ -1,4 +1,4 @@
-import { Indicator, PineTS } from 'pinets';
+import { Indicator, PineHistoryLimitError, PineTS } from 'pinets';
 import { applyBarIndexOffset, toPineSessionCandles } from '../../../packages/pine-runtime/src/bar-index-origin.js';
 import { attachHighBrokerReplay } from '../../../packages/pine-runtime/src/high-execution.js';
 import { HighSafetyError } from '../../../packages/pine-runtime/src/high-safety.js';
@@ -14,6 +14,9 @@ import {
 } from '../../../packages/pine-runtime/src/series-requests.js';
 import { tradingViewStrategyDefaults } from '../../../packages/pine-runtime/src/tradingview-defaults.js';
 import { BACKTEST_TIMEFRAME_MS, type Candle, type WorkerFailure, type WorkerRequest, type WorkerResponse } from '../../../packages/shared/src/contracts.js';
+
+/** Past bars kept for each script variable: TradingView's largest max_bars_back. */
+const PINE_HISTORY_BARS = 5_000;
 
 let handled = false;
 let replied = false;
@@ -107,7 +110,6 @@ process.on('message', async (message: WorkerRequest | SeriesResponseMessage) => 
     // otherwise report it as "[Indicator.prop] unknown key".
     const codeError = pineCodeError(message.source);
     if (codeError) throw codeError;
-    const pine = new PineTS(source as never, message.market.tickerId, message.market.pineTimeframe);
     const strategy = new Indicator(message.source);
     const defaults = tradingViewStrategyDefaults(message.source);
     strategy.prop.initial_capital = message.execution.initialCapital;
@@ -136,14 +138,29 @@ process.on('message', async (message: WorkerRequest | SeriesResponseMessage) => 
       strategy.prop.process_orders_on_close = message.execution.processOrdersOnClose;
     }
     strategy.prop.use_bar_magnifier = message.highReplay !== undefined;
-    const highExecution = message.highReplay
-      ? attachHighBrokerReplay(pine, message.highReplay, {
-          retainAudit: false,
-          deriveTicksFromBars: message.highReplay.deriveTicksFromBars === true,
-          deriveTickSize: message.market.mintick,
-        })
-      : undefined;
-    const context = await Promise.race([pine.run(strategy), failed]) as unknown as { strategy?: unknown };
+    const { highReplay } = message;
+    const runStrategy = async (historyLimit: number | undefined) => {
+      const pine = new PineTS(source as never, market.tickerId, market.pineTimeframe);
+      pine.setHistoryLimit(historyLimit);
+      // The response holds the strategy ledger only; plotted values are never read.
+      pine.setPlotHistory(false);
+      const highExecution = highReplay
+        ? attachHighBrokerReplay(pine, highReplay, {
+            retainAudit: false,
+            deriveTicksFromBars: highReplay.deriveTicksFromBars === true,
+            deriveTickSize: market.mintick,
+          })
+        : undefined;
+      const context = await Promise.race([pine.run(strategy), failed]) as unknown as { strategy?: unknown };
+      return { context, highExecution };
+    };
+    // Each script variable keeps its last PINE_HISTORY_BARS bars, as on TradingView, so memory
+    // stops growing with the period. A script that reads further back runs again with its whole
+    // history: the result never depends on the limit.
+    const { context, highExecution } = await runStrategy(PINE_HISTORY_BARS).catch((error: unknown) => {
+      if (error instanceof PineHistoryLimitError && !seriesFailure) return runStrategy(undefined);
+      throw error;
+    });
     if (seriesFailure) throw seriesFailure;
     highExecution?.assertFinalPendingOrdersSupported();
     if (!context.strategy) throw new Error('The Pine script did not declare a strategy. Use strategy(...), not indicator(...).');

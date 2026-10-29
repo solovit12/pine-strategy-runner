@@ -91,6 +91,12 @@ function prefixedMessage(english: string, russian: string, message: string): str
   return bilingualMessage(`${english} ${match ? match[1] : message}`, `${russian} ${match ? match[2] : message}`);
 }
 
+/** Why a strategy could not be saved, in words: a problem in the code first (the full list stays in `details`). */
+function invalidStrategyMessage(issues: ReadonlyArray<{ message: string; path: ReadonlyArray<PropertyKey> }>): string {
+  const first = (issues.find((issue) => issue.path[0] === 'source') ?? issues[0])?.message;
+  return first ? prefixedMessage('Not saved:', 'Не сохранено:', first) : 'Invalid strategy settings.';
+}
+
 /**
  * `all`: one process does everything (development and tests).
  * `engine`: only Paper, behind a shared token, so it survives site restarts.
@@ -548,7 +554,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const catalog = getStrategyCatalog();
     if (!catalog) return reply.code(503).send({ kind: 'STRATEGY_CATALOG_NOT_CONFIGURED', error: 'Strategy saving needs STRATEGY_CATALOG_DIR.' });
     const parsed = CreateStrategySchema.safeParse(request.body);
-    if (!parsed.success) return reply.code(400).send({ kind: 'INVALID_STRATEGY', error: 'Invalid strategy settings.', details: parsed.error.issues });
+    if (!parsed.success) return reply.code(400).send({ kind: 'INVALID_STRATEGY', error: invalidStrategyMessage(parsed.error.issues), details: parsed.error.issues });
     try {
       return reply.code(201).send(catalog.create(parsed.data));
     } catch (error) {
@@ -563,7 +569,7 @@ export async function buildApp(options: BuildAppOptions = {}) {
     const catalog = getStrategyCatalog();
     if (!catalog) return reply.code(503).send({ kind: 'STRATEGY_CATALOG_NOT_CONFIGURED', error: 'Strategy saving needs STRATEGY_CATALOG_DIR.' });
     const parsed = SaveStrategyVersionSchema.safeParse(request.body);
-    if (!parsed.success) return reply.code(400).send({ kind: 'INVALID_STRATEGY', error: 'Invalid strategy settings.', details: parsed.error.issues });
+    if (!parsed.success) return reply.code(400).send({ kind: 'INVALID_STRATEGY', error: invalidStrategyMessage(parsed.error.issues), details: parsed.error.issues });
     try {
       return reply.code(201).send(catalog.saveVersion(request.params.id, parsed.data));
     } catch (error) {

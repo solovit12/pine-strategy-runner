@@ -137,9 +137,15 @@ A backtest before Paper is optional.
 
 - **Editor.** A code editor for Pine v5/v6 `strategy()` scripts. Your current code is kept in the
   browser, so a page reload does not lose it.
-- **Open / Save.** The library keeps your strategies in the local database: the Pine code, the
-  backtest settings and the last Paper settings together. Each name is used once; saving again
-  replaces the saved strategy of that name. **Save as a separate strategy** creates another entry.
+- **Pine v4 code.** Under the editor, **Convert to v5** rewrites it the way TradingView's v4→v5
+  migration guide does (`ta.`/`math.` namespaces, typed inputs, `iff` → `?:` and so on); Ctrl+Z (⌘Z)
+  undoes it. Order conditions written as `when=` (or `strategy.close("L", cond)`) are not supported
+  here (the order would go out on every bar), so the editor also offers **Move conditions into if**. Check the converted code, then run a backtest and save.
+- **Create / Open / Save.** The library keeps your strategies in the local database: the Pine code,
+  the backtest settings and the last Paper settings together. **Create** empties the editor for a new
+  strategy (the backtest settings stay; **Undo** in the message brings the previous code back), and
+  its first **Save** adds it to the library. Saving an opened strategy replaces it with the new code
+  and settings. Each name is used once.
   **Source link** (optional) keeps where the strategy comes from, for example its TradingView page;
   the library shows it as a link.
 - **Delete strategy** removes one from the library (runs that already used it keep their own copy).

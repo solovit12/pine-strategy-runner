@@ -83,10 +83,10 @@ button { border: 0; }
 .strategy-library-current strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #dbe5e7; font-size: 12px; }
 .strategy-library-current small { flex: none; color: #a0b2aa; font: 700 11px/1.3 "Cascadia Code", Consolas, monospace; }
 .strategy-library-buttons { flex: none; display: flex; gap: 6px; }
-.strategy-library-buttons button, .strategy-dialog-heading button, .strategy-dialog-actions button, .strategy-save-more button { min-height: 33px; padding: 5px 10px; border: 1px solid #465257; color: #d8e1e4; background: #151c1e; cursor: pointer; font: 700 11px/1.3 "Cascadia Code", Consolas, monospace; }
+.strategy-library-buttons button, .strategy-dialog-heading button, .strategy-dialog-actions button { min-height: 33px; padding: 5px 10px; border: 1px solid #465257; color: #d8e1e4; background: #151c1e; cursor: pointer; font: 700 11px/1.3 "Cascadia Code", Consolas, monospace; }
 .strategy-library-buttons button.primary, .strategy-dialog-actions button.primary { border-color: #4e8b69; color: #b2f2ce; background: #173025; }
-.strategy-library-buttons button:hover:not(:disabled), .strategy-dialog-heading button:hover:not(:disabled), .strategy-dialog-actions button:hover:not(:disabled), .strategy-save-more button:hover:not(:disabled) { border-color: var(--green); color: var(--green); }
-.strategy-library-buttons button:disabled, .strategy-dialog-heading button:disabled, .strategy-dialog-actions button:disabled, .strategy-save-more button:disabled { opacity: .45; cursor: default; }
+.strategy-library-buttons button:hover:not(:disabled), .strategy-dialog-heading button:hover:not(:disabled), .strategy-dialog-actions button:hover:not(:disabled) { border-color: var(--green); color: var(--green); }
+.strategy-library-buttons button:disabled, .strategy-dialog-heading button:disabled, .strategy-dialog-actions button:disabled { opacity: .45; cursor: default; }
 .strategy-library :focus-visible, .strategy-dialog :focus-visible, .catalog-message :focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
 .strategy-dialog-backdrop { position: fixed; z-index: 2000; inset: 0; display: grid; place-items: center; padding: 18px; background: rgba(4, 8, 9, .78); }
 .strategy-dialog { width: min(780px, 100%); max-height: calc(100vh - 36px); overflow: auto; border: 1px solid #48575b; background: #101719; box-shadow: 0 20px 80px rgba(0, 0, 0, .7); color: #d9e2e5; }
@@ -127,9 +127,6 @@ button { border: 0; }
 .report-canvas { width: 100%; height: auto; border: 1px solid #303b3e; }
 .report-caption textarea { width: 100%; padding: 8px 10px; border: 1px solid #465257; color: #e1e8ea; background: #0d1214; font: 13px/1.5 Inter, ui-sans-serif, system-ui, sans-serif; resize: vertical; }
 @media (max-width: 760px) { .report-preview { grid-template-columns: 1fr; } }
-.strategy-save-more { margin-top: 14px; padding-top: 12px; border-top: 1px solid #303b3e; color: #aab8bc; font-size: 12px; }
-.strategy-save-more summary { cursor: pointer; }
-.strategy-save-more p { margin: 8px 0; }
 .editor-wrap { height: 381px; background: #101416; }
 .editor-wrap .monaco-editor, .editor-wrap .margin { background-color: #101416 !important; }
 .editor-loading { display: grid; height: 100%; place-items: center; color: #a0adb2; font-size: 14px; }
@@ -147,6 +144,12 @@ button { border: 0; }
 button.pine-check-line { cursor: pointer; text-decoration: underline dotted; }
 button.pine-check-line:hover { color: var(--green); }
 button.pine-check-line:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+.pine-check-fix { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; padding: 0 13px 8px; color: #d9e2e5; line-height: 1.45; }
+.pine-check-fix button { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border: 1px solid var(--green); border-radius: 4px; color: var(--green); background: transparent; font: inherit; cursor: pointer; }
+.pine-check-fix button:hover { color: #0d1214; background: var(--green); }
+.pine-check-fix button:focus-visible { outline: 2px solid var(--green); outline-offset: 2px; }
+.pine-check-converted { padding: 0 13px 8px; color: var(--green); line-height: 1.45; }
+.pine-check-converted ul { margin: 4px 0 0; padding-left: 18px; color: var(--amber); }
 .editor-footer { min-height: 36px; padding: 8px 13px; display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 14px; border-top: 1px solid var(--line); color: #a0adb2; font: 12px/1.3 "Cascadia Code", Consolas, monospace; }
 .chart-canvas { position: relative; flex: 1; min-height: 409px; overflow: hidden; }
 .chart-empty, .chart-loading { position: absolute; z-index: 2; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; background: #101416; color: var(--muted); }

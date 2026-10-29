@@ -14,6 +14,8 @@ strategy can behave differently. This page lists what is tested.
 | Commission | Supported | You enter the percent per fill; it is charged on entry and again on exit. |
 | Slippage | Supported | A number of ticks applied to market and stop fills. |
 | Long/short leverage | Partial | Manual leverage becomes Pine margin percent; `Auto` keeps the script's value. Margin liquidation is approximate. |
+| Pine v4 scripts | Converted | The editor offers **Convert to v5**: the code is rewritten as TradingView's v4→v5 migration guide does (`ta.`/`math.`/`request.` namespaces, typed `input.*`, `iff` → `?:`, `transp` → `color.new`, `true`/`false` → `strategy.long`/`strategy.short`), undoable with Ctrl+Z. Pine v3 and older: convert in TradingView first. |
+| `when` on strategy orders | Converted | `when=` or the unnamed v4/v5 form (`strategy.close("L", cond)`, `strategy.close_all(cond)`) is not supported by the engine (the order would go out on every bar), so the run stops with a message; the editor's **Move conditions into if** button puts the order inside `if <condition>`. |
 | Pine v5 margin defaults | Supported | Omitted `margin_long`/`margin_short` mean unlimited leverage, as on TradingView. |
 | Market orders | Supported | Filled at the open of the next bar. |
 | Bar detail | Supported | **Every minute** (default): stops, take-profits and limits are checked on every 1-minute candle inside the bar. **4 points per bar**: only open, high, low and close, as TradingView's Default bar detailization on a free account (no Bar Magnifier) — use it to compare with TradingView. 1m always uses 4 points. |

@@ -16,7 +16,7 @@ import { PineRequest } from './namespaces/request/request.index';
 import TechnicalAnalysis from './namespaces/ta/ta.index';
 import { PineTypeObject } from './namespaces/PineTypeObject';
 import { Strategy, StrategyState } from './namespaces/strategy/strategy.index';
-import { Series } from './Series';
+import { assertNotDropped, Series } from './Series';
 import { Log } from './namespaces/Log';
 import { Runtime } from './namespaces/Runtime';
 import { Str } from './namespaces/Str';
@@ -69,6 +69,11 @@ export class Context {
 
     public __maxLoops: number = 500000;
     public NA: any = NaN;
+
+    /** Past bars kept for script series and arguments in a one-shot run; undefined keeps all (see PineTS.setHistoryLimit). */
+    public historyLimit: number | undefined = undefined;
+    /** False keeps only the latest point of each plot in a one-shot run (see PineTS.setPlotHistory). */
+    public keepPlotHistory: boolean = true;
 
     /** Runtime warnings (OOB access, etc.) — non-blocking, script continues. */
     public warnings: { message: string; method?: string; bar: number }[] = [];
@@ -846,6 +851,7 @@ export class Context {
             // index 0 -> last element (length - 1)
             // index 1 -> second last element (length - 2)
             const realIndex = source.length - 1 - index;
+            if (realIndex < 0) assertNotDropped(source, realIndex);
             if (realIndex < 0 || realIndex >= source.length) {
                 return NaN;
             }

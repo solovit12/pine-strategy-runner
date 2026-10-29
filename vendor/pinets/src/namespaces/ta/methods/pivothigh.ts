@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-only
 
 import { pivothigh as pivothighUtil } from '../utils/pivothigh';
-import { Series } from '../../../Series';
+import { assertNotDropped, droppedBars, Series } from '../../../Series';
 
 export function pivothigh(context: any) {
     return (source: any, _leftbars: any, _rightbars: any, _callId?: string) => {
@@ -20,7 +20,9 @@ export function pivothigh(context: any) {
         // Stateless calculation using full array history
         const sourceArray = Series.from(source).toArray();
         const result = pivothighUtil(sourceArray, leftbars, rightbars);
-        const idx = context.idx;
+        // A history limit may have dropped the oldest bars of a script series.
+        const idx = context.idx - droppedBars(sourceArray);
+        if (idx < leftbars + rightbars) assertNotDropped(sourceArray, idx - leftbars - rightbars);
         return context.precision(result[idx]);
     };
 }

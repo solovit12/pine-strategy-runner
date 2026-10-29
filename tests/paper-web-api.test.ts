@@ -1,9 +1,22 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { ApiResponseError, createPaperExperiment, listPaperExperiments, loadPaperCapabilities, loadStrategyCatalogCapabilities } from '../apps/web/src/lib/api';
+import { ApiResponseError, createPaperExperiment, listPaperExperiments, listStrategies, loadPaperCapabilities, loadStrategyCatalogCapabilities } from '../apps/web/src/lib/api';
 
 afterEach(() => vi.unstubAllGlobals());
 
 describe('Paper browser API', () => {
+  it('says the sign-in expired instead of "Failed to fetch", and a lost connection plainly', async () => {
+    // Cloudflare Access sends every request of an expired session to its login page on another site.
+    const signedOut = vi.fn((_url: string, init?: RequestInit) => (init?.redirect === 'manual'
+      ? Promise.resolve({ type: 'opaqueredirect' } as Response)
+      : Promise.reject(new TypeError('Failed to fetch'))));
+    vi.stubGlobal('fetch', signedOut);
+    await expect(listStrategies()).rejects.toThrow(/^Your sign-in to this site has expired\. Reload the page/);
+    expect(signedOut).toHaveBeenLastCalledWith('/api/health', { redirect: 'manual', cache: 'no-store' });
+
+    vi.stubGlobal('fetch', vi.fn().mockRejectedValue(new TypeError('Failed to fetch')));
+    await expect(listStrategies()).rejects.toThrow(/^No connection to the server\./);
+  });
+
   it('reads catalog availability before offering strategy storage', async () => {
     const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ enabled: false }), { status: 200 }));
     vi.stubGlobal('fetch', fetch);

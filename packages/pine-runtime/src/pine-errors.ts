@@ -1,4 +1,5 @@
 import { pineToJS } from 'pinets';
+import { pineWhenLine } from '../../shared/src/pine-v4-to-v5.js';
 
 /**
  * Plain-language messages for mistakes in Pine code, with the line they are on. The engine's
@@ -77,6 +78,10 @@ export function pineSyntaxError(source: string): PineCodeError | null {
     return new PineCodeError('Add the Pine version as the first line, for example //@version=6. / '
       + 'Добавьте версию Pine первой строкой, например //@version=6.');
   }
+  if (parsed.version === 4) {
+    return new PineCodeError('Pine v4 is not supported; press "Convert to v5" under the editor (or convert it in TradingView\'s Pine Editor). / '
+      + 'Pine v4 не поддерживается; нажмите «Convert to v5» под редактором (или переведите скрипт в Pine Editor на TradingView).');
+  }
   if (parsed.version < 5) {
     return new PineCodeError(`Pine v${parsed.version} is not supported; convert the script to v5 or v6 (TradingView can convert it in the Pine Editor). / `
       + `Pine v${parsed.version} не поддерживается; переведите скрипт на v5 или v6 (TradingView умеет это в Pine Editor).`);
@@ -131,9 +136,17 @@ export function pineDeclarationError(source: string): PineCodeError | null {
       + 'В скрипте нет строки strategy(...). Добавьте её после //@version, например strategy("My strategy", overlay=true).');
 }
 
+/** A `when` condition on a strategy order (when= or unnamed): v5 accepts it, but this engine ignores it and would send the order on every bar. */
+export function pineWhenError(source: string): PineCodeError | null {
+  const line = pineWhenLine(source);
+  return line === null ? null : new PineCodeError(onLine(source, line,
+    'the order\'s condition (when) is not supported here: the order would be sent on every bar. Press "Move conditions into if" under the editor, or put the order inside "if <condition>".',
+    'условие заявки (when) здесь не поддерживается: заявка уходила бы на каждом баре. Нажмите «Move conditions into if» под редактором или поместите заявку внутрь «if <условие>».'));
+}
+
 /** The first mistake that stops the code from running as a strategy, or null. */
 export function pineCodeError(source: string): PineCodeError | null {
-  return pineSyntaxError(source) ?? pineDeclarationError(source);
+  return pineSyntaxError(source) ?? pineDeclarationError(source) ?? pineWhenError(source);
 }
 
 /** First line where `pattern` appears outside comments, or null. */
